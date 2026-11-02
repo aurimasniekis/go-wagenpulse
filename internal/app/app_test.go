@@ -229,3 +229,89 @@ func TestEveryOperationDeclaresPermission(t *testing.T) {
 		t.Fatalf("only %d operations found", n)
 	}
 }
+
+// raw sends a request with the client's credentials and extra headers, returning the response (body read).
+func (c *client) raw(method, path string, body any, hdr map[string]string) (*http.Response, []byte) {
+	c.t.Helper()
+	var r io.Reader
+	if body != nil {
+		b, _ := json.Marshal(body)
+		r = bytes.NewReader(b)
+	}
+	req, _ := http.NewRequest(method, c.base+path, r) //nolint:noctx // test
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.Header.Set("Origin", c.base)
+	if c.csrf != "" {
+		req.Header.Set(api.CSRFHeader, c.csrf)
+	}
+	if c.auth != "" {
+		req.Header.Set("Authorization", "Bearer "+c.auth)
+	}
+	for k, v := range hdr {
+		req.Header.Set(k, v)
+	}
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	out, _ := io.ReadAll(resp.Body)
+	return resp, out
+}
+
+// Regressions found by the Terraform provider's acceptance tests.
+func TestAPIContractRegressions(t *testing.T) {
+	srv, a := testServer(t)
+	c := bootstrap(t, srv, a)
+
+	// 1. Unrestricted tokens report vehicle_ids as [] (the schema says array), on create and on read.
+	resp, body := c.raw(http.MethodPost, "/api/v1/tokens", map[string]any{"name": "t", "scopes": []string{"users.read"}}, nil)
+	var created map[string]any
+	_ = json.Unmarshal(body, &created)
+	if resp.StatusCode != http.StatusCreated || created["vehicle_ids"] == nil {
+		t.Fatalf("create token: %d vehicle_ids=%v", resp.StatusCode, created["vehicle_ids"])
+	}
+	_, body = c.raw(http.MethodGet, "/api/v1/tokens/"+created["id"].(string), nil, nil)
+	var got map[string]any
+	_ = json.Unmarshal(body, &got)
+	if ids, ok := got["vehicle_ids"].([]any); !ok || len(ids) != 0 {
+		t.Fatalf("read token vehicle_ids=%v", got["vehicle_ids"])
+	}
+
+	// 2. Settings: defaults are revision 1; the first stored write becomes 2, so a stale If-Match "1" is refused.
+	resp, body = c.raw(http.MethodGet, "/api/v1/settings/retention", nil, nil)
+	if resp.Header.Get("ETag") != `"1"` {
+		t.Fatalf("defaults etag %q", resp.Header.Get("ETag"))
+	}
+	var ret map[string]any
+	_ = json.Unmarshal(body, &ret)
+	ret["events_days"] = float64(200)
+	resp, _ = c.raw(http.MethodPut, "/api/v1/settings/retention", ret, map[string]string{"If-Match": `"1"`})
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("ETag") != `"2"` {
+		t.Fatalf("first write: %d etag %q", resp.StatusCode, resp.Header.Get("ETag"))
+	}
+	resp, _ = c.raw(http.MethodPut, "/api/v1/settings/retention", ret, map[string]string{"If-Match": `"1"`})
+	if resp.StatusCode != http.StatusPreconditionFailed {
+		t.Fatalf("concurrent first write with a stale ETag: %d", resp.StatusCode)
+	}
+
+	// 3. Rate-limited token requests say when to retry.
+	tc := newClient(t, srv.URL)
+	tc.auth = created["token"].(string)
+	limited := false
+	for range 200 {
+		r, _ := tc.raw(http.MethodGet, "/api/v1/users", nil, nil)
+		if r.StatusCode == http.StatusTooManyRequests {
+			if r.Header.Get("Retry-After") == "" {
+				t.Fatal("429 without Retry-After")
+			}
+			limited = true
+			break
+		}
+	}
+	if !limited {
+		t.Fatal("token was never rate limited")
+	}
+}

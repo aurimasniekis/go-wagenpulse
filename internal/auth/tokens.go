@@ -59,6 +59,9 @@ func toToken(r db.ApiToken, now time.Time) Token {
 		Scopes: []Permission{}, VehicleIDs: []string{}}
 	_ = json.Unmarshal([]byte(r.ScopesJson), &t.Scopes)
 	_ = json.Unmarshal([]byte(r.VehicleIdsJson), &t.VehicleIDs)
+	if t.VehicleIDs == nil {
+		t.VehicleIDs = []string{} // rows written before this fix may hold "null"
+	}
 	if r.ExpiresAt.Valid {
 		e := time.UnixMicro(r.ExpiresAt.Int64).UTC()
 		t.ExpiresAt = &e
@@ -136,7 +139,7 @@ func (svc *Service) CreateToken(ctx context.Context, p *Principal, in TokenInput
 			scopes[s] = struct{}{}
 		}
 	}
-	vehicles := slices.Clone(in.VehicleIDs)
+	vehicles := append([]string{}, in.VehicleIDs...) // never nil: stored and returned as a JSON array
 	sort.Strings(vehicles)
 	vehicles = slices.Compact(vehicles)
 	for _, id := range vehicles {

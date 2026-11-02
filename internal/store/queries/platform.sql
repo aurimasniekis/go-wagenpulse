@@ -12,7 +12,9 @@ UPDATE installation SET setup_completed_at = ?, updated_at = ? WHERE id = 1 AND 
 SELECT key, value, revision, updated_at, updated_by FROM settings WHERE key = ?;
 
 -- name: UpsertSetting :exec
-INSERT INTO settings (key, value, revision, updated_at, updated_by) VALUES (?, ?, 1, ?, ?)
+-- Revision 1 is the built-in defaults (never stored), so the first stored write is revision 2 and If-Match "1" detects
+-- a concurrent first write.
+INSERT INTO settings (key, value, revision, updated_at, updated_by) VALUES (?, ?, 2, ?, ?)
 ON CONFLICT (key) DO UPDATE SET value = excluded.value, revision = settings.revision + 1, updated_at = excluded.updated_at,
   updated_by = excluded.updated_by;
 

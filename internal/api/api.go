@@ -454,6 +454,9 @@ func (d *Deps) AuthenticateHTTP(r *http.Request, perm auth.Permission) (*auth.Pr
 
 // WriteProblem writes a problem document from a plain handler.
 func WriteProblem(w http.ResponseWriter, p *Problem) {
+	for k, vs := range p.GetHeaders() {
+		w.Header()[k] = vs
+	}
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(p.Status)

@@ -23,7 +23,24 @@ type Problem struct {
 	Action   string              `json:"action,omitempty" doc:"Same-origin URL the client should navigate to (re-authentication)."`
 }
 
+// retryAfterSeconds is sent with every 429: the token limiter refills continuously, so one second is always enough
+// for at least one more request; sign-in throttling answers 429 only for the throttle check itself.
+const retryAfterSeconds = "1"
+
+// GetHeaders adds Retry-After to rate-limited responses (huma.HeadersError).
+func (p *Problem) GetHeaders() http.Header {
+	if p.Status == http.StatusTooManyRequests {
+		return http.Header{"Retry-After": []string{retryAfterSeconds}}
+	}
+	return nil
+}
+
 func writeProblem(api huma.API, ctx huma.Context, p *Problem) error {
+	for k, vs := range p.GetHeaders() {
+		for _, v := range vs {
+			ctx.SetHeader(k, v)
+		}
+	}
 	ctx.SetHeader("Content-Type", "application/problem+json")
 	ctx.SetStatus(p.Status)
 	return api.Marshal(ctx.BodyWriter(), "application/json", p)
