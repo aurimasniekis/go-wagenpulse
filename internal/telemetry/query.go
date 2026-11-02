@@ -450,13 +450,12 @@ func (r *Reader) buckets(ctx context.Context, q SeriesQuery, bucket time.Duratio
 	var err error
 	if bucket >= time.Hour {
 		out.Source = "rollups"
-		rows, err = r.s.ReadDB().QueryContext(ctx, `SELECT (bucket_start - ?) / ? AS b, sum(n), min(min), max(max), sum(sum),
-			(SELECT last_num FROM observation_rollups r2 WHERE r2.vehicle_num = r.vehicle_num AND r2.signal_num = r.signal_num
-			   AND (r2.bucket_start - ?) / ? = (r.bucket_start - ?) / ? ORDER BY r2.last_at DESC LIMIT 1)
-			FROM observation_rollups r WHERE vehicle_num = ? AND signal_num = ? AND bucket_start >= ? AND bucket_start < ?
-			GROUP BY b ORDER BY b`, from, bw, from, bw, from, bw, q.VehicleNum, q.Signal.Num, from, to)
+		// One range scan of the rollup primary key, grouped into display buckets (hourly rollups add up exactly).
+		rows, err = r.s.ReadDB().QueryContext(ctx, `SELECT (bucket_start - ?) / ? AS b, sum(n), min(min), max(max), sum(sum)
+			FROM observation_rollups WHERE vehicle_num = ? AND signal_num = ? AND bucket_start >= ? AND bucket_start < ?
+			GROUP BY b ORDER BY b`, from, bw, q.VehicleNum, q.Signal.Num, from, to)
 	} else {
-		rows, err = r.s.ReadDB().QueryContext(ctx, `SELECT (observed_at - ?) / ? AS b, count(*), min(num), max(num), sum(num), NULL
+		rows, err = r.s.ReadDB().QueryContext(ctx, `SELECT (observed_at - ?) / ? AS b, count(*), min(num), max(num), sum(num)
 			FROM observations WHERE vehicle_num = ? AND signal_num = ? AND observed_at >= ? AND observed_at < ? AND quality = 'ok'
 			  AND num IS NOT NULL GROUP BY b ORDER BY b`, from, bw, q.VehicleNum, q.Signal.Num, from, to)
 	}
@@ -467,8 +466,8 @@ func (r *Reader) buckets(ctx context.Context, q SeriesQuery, bucket time.Duratio
 	got := map[int64]Point{}
 	for rows.Next() {
 		var b, n int64
-		var mn, mx, sum, last sql.NullFloat64
-		if err := rows.Scan(&b, &n, &mn, &mx, &sum, &last); err != nil {
+		var mn, mx, sum sql.NullFloat64
+		if err := rows.Scan(&b, &n, &mn, &mx, &sum); err != nil {
 			return err
 		}
 		p := Point{Count: n}

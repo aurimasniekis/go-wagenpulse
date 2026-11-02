@@ -22,8 +22,9 @@ large fleets should shorten observation retention; rollups keep long-range chart
 
 - `data_dir/wagenpulse.db` (+ `-wal`, `-shm`), mode 0600, exclusive `wagenpulse.lock`.
 - `data_dir/blobs/sha256/<2>/<64>` raw deliveries (content addressed, 0600).
-- `data_dir/snapshots/` pre-migration snapshots.
-- `data_dir/backups/` default target of `wagenpulse backup create`.
+- `data_dir/backups/` pre-migration snapshots (`VACUUM INTO`, newest 3 kept).
+- Backups (`wagenpulse backup create --out DIR`) are written outside the data directory; targets inside it are refused
+  (ADR-0025).
 
 ## Telemetry tables
 
@@ -59,9 +60,27 @@ transaction.
 
 ## Performance validation
 
-`make bench` runs `internal/observations` benchmarks (ingest throughput, chart queries on a synthetic 1-year dataset).
-Results are recorded below only after they have been measured.
+`make bench` runs the `internal/telemetry` benchmarks. The dataset is synthetic: one vehicle, 16 numeric signals,
+one year of deliveries every 15 minutes with three capture times each. That is 1,681,920 observations, written
+through the production `Writer` (dedupe, latest state, hourly rollups) in about 2 min 20 s, roughly 12k
+observations/s including rollup upkeep.
 
-| Benchmark | Result | Date / machine |
-|---|---|---|
-| (pending M10) | | |
+Measured 2026-11-02 on an Apple M1 Max (arm64, macOS, SSD), `go test -bench -benchtime 10x`:
+
+| Benchmark | Result |
+|---|---|
+| Ingest a new 48-value delivery (fresh store) | 3.1 ms/delivery, ≈ 15,600 observations/s |
+| Re-import an identical delivery (dedupe path) | 0.42 ms/delivery, ≈ 114,000 observations/s |
+| Chart, 24 h (raw, 288 points) | 2.4 ms |
+| Chart, 7 days (raw, 672 points) | 4.1 ms |
+| Chart, 30 days (hourly rollups, 720 points) | 2.9 ms |
+| Chart, 365 days (rollups, 730 daily points) | 27 ms |
+| Latest state, 16 signals | 0.15 ms |
+| Export, 30 days × 4 signals (34,560 rows) | 116 ms, ≈ 300,000 rows/s |
+
+The 30-day and 365-day charts first measured about 1 s each. A correlated subquery for an unused "last value" made
+the rollup query quadratic; removing it gave the figures above. `TestRollupBucketsMatchRawAggregates` checks that
+rollup buckets equal aggregates computed from the raw observations, gaps included.
+
+At the planned load (20 vehicles, one delivery per 15 minutes each), ingest uses well under 1% of one writer.
+Interactive charts stay below 30 ms for a full year of one signal.
