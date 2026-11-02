@@ -41,6 +41,7 @@ func rootCommands() []*command {
 			{name: "status", summary: "show keyring purposes and versions", run: runKeysStatus},
 			{name: "rotate", summary: "rotate a purpose key (old version stays decrypt-only) and re-seal stored secrets", run: runKeysRotate},
 			{name: "retire", summary: "retire a decrypt-only purpose key version once nothing uses it", run: runKeysRetire},
+			{name: "rewrap", summary: "rewrap the keyring under a new KEK (server stopped)", run: runKeysRewrap},
 		}},
 		{name: "admin", summary: "host-side administration (needs the data-directory lock and the KEK)", sub: []*command{
 			{name: "setup-token", summary: "issue a single-use setup token to create the root user", run: runSetupToken},

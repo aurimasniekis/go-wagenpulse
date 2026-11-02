@@ -225,7 +225,7 @@ func runKeysStatus(ctx context.Context, args []string, stdout, stderr io.Writer)
 func runKeysRotate(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	fs := newFlagSet("keys rotate", stderr)
 	cfgPath := configFlag(fs)
-	purpose := fs.String("purpose", "", "purpose to rotate: field or token (rotating token signs everyone out)")
+	purpose := fs.String("purpose", "", "purpose to rotate: field or token (retiring the old token version later signs everyone out and invalidates older API tokens)")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
@@ -282,6 +282,36 @@ func runKeysRetire(ctx context.Context, args []string, stdout, stderr io.Writer)
 		return err
 	}
 	_, err = fmt.Fprintf(stdout, "%s v%d retired\n", p, *version)
+	return err
+}
+
+// runKeysRewrap rewraps every keyring key under a new KEK (server stopped: it changes what the server would load).
+func runKeysRewrap(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	fs := newFlagSet("keys rewrap", stderr)
+	cfgPath := configFlag(fs)
+	newPath := fs.String("new-kek", "", "path of the new KEK file (create it with `wagenpulse keys init --out`)")
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	if *newPath == "" {
+		return &exitError{code: 2, err: errors.New("--new-kek is required")}
+	}
+	a, err := openApp(ctx, *cfgPath, stderr)
+	if err != nil {
+		return err
+	}
+	defer a.Close()
+	newKEK, err := keyring.LoadKEK(keyring.Source{Kind: "file", File: *newPath, Production: a.Cfg.IsProduction(), DataDir: a.Cfg.DataDir})
+	if err != nil {
+		return err
+	}
+	n, err := keyring.RotateKEK(ctx, a.Store, a.KEK, newKEK)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(stdout, "Rewrapped %d keyring keys from KEK %s to KEK %s.\n"+
+		"Now point kek.file at %s and start the server. Keep the old KEK until the server starts and existing backups\n"+
+		"have been replaced (older backups still need the old KEK), then destroy it.\n", n, a.KEK.ID(), newKEK.ID(), *newPath)
 	return err
 }
 

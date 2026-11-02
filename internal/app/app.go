@@ -46,6 +46,8 @@ type App struct {
 	ClientIP       *httpx.ClientIPResolver
 	InstallationID string
 	StartedAt      time.Time
+	// KEK is the loaded key-encryption key (needed to rewrap the keyring under a new KEK).
+	KEK *keyring.LocalKEK
 
 	Domain *Domain
 
@@ -116,6 +118,7 @@ func (a *App) init(ctx context.Context, opts Options) error {
 	if err != nil {
 		return err
 	}
+	a.KEK = kek
 	if a.Keyring, err = keyring.Load(ctx, a.Store, kek); err != nil {
 		return err
 	}
