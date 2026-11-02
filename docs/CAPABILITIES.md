@@ -114,3 +114,17 @@ Last reviewed: 2026-11-02.
 | Live verification of the unofficial collector | An operator running the collector against their own account; results recorded here without identifiers |
 | Official API | A VW-published API reference, OAuth client registration process and terms for data recipients |
 | V5.0 dictionary | The newer dictionary PDF; import it with `wagenpulse dictionary import` |
+
+## Dictionary errata
+
+The published Continuous Data dictionary (v1.0.0, 2025-09-11) contains copy-paste errors in some code descriptions.
+WagenPulse corrects only those that are unambiguous from sibling signals (`dictionary.EnumFor`). Stored values are
+never changed; only their decoding is.
+
+| Signals | Published description | Decoded as | Basis |
+|---|---|---|---|
+| `open_state_front_right_door`, `open_state_rear_right_door` | "locked (2) or unlocked (3)" | open (2), closed (3) | every other `open_state_*` signal |
+| `safe_state_front_engine_bonnet`, `safe_state_tailgate` | lists unsupported (0), invalid (1), unsafe (3); no code 2 | adds safe (2) | every other `safe_state_*` signal |
+
+The tyre-pressure unit is published as "10kPA / Bar / PSI / kPA". It is ambiguous, so values are shown as reported
+and never converted.

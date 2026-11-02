@@ -49,7 +49,7 @@ var acronyms = map[string]string{"bem": "BEM", "scr": "SCR", "hv": "HV", "soc": 
 // door lock").
 var statePrefixes = []struct{ prefix, suffix string }{
 	{"locked_state_", "lock"},
-	{"open_state_", "open"},
+	{"open_state_", ""},
 	{"safe_state_", "safety"},
 	{"tyre_pressure_actual_", "tyre pressure"},
 	{"tyre_pressure_required_", "tyre pressure (required)"},
@@ -72,7 +72,7 @@ func Label(name string) string {
 			if strings.HasPrefix(p.suffix, "tyre") {
 				part = strings.TrimSuffix(part, "_tyre") // "spare_tyre" + "tyre pressure" → "Spare tyre pressure"
 			}
-			return sentence(words(part) + " " + p.suffix)
+			return sentence(strings.TrimSpace(words(part) + " " + p.suffix))
 		}
 	}
 	if part, ok := strings.CutPrefix(n, "state_"); ok {
@@ -145,6 +145,25 @@ func Enum(description string) map[string]string {
 		return nil
 	}
 	return out
+}
+
+// EnumFor decodes a signal's codes and applies documented errata of the published dictionary (v1.0.0, 2025-09-11):
+//   - open_state_* signals whose description was copied from the lock signal ("locked (2) or unlocked (3)") use the
+//     open/closed codes of every other open_state_* signal;
+//   - safe_state_* signals whose description omits "safe (2)" get it from their siblings.
+//
+// Only these sibling-consistent corrections are made; see docs/CAPABILITIES.md (dictionary errata).
+func EnumFor(name, description string) map[string]string {
+	e := Enum(description)
+	switch {
+	case e == nil:
+		return nil
+	case strings.HasPrefix(name, "open_state_") && e["2"] == "locked" && e["3"] == "unlocked":
+		e["2"], e["3"] = "open", "closed"
+	case strings.HasPrefix(name, "safe_state_") && e["3"] == "unsafe" && e["2"] == "":
+		e["2"] = "safe"
+	}
+	return e
 }
 
 // EnumCodes returns the codes of an enum in numeric order (for stable display).

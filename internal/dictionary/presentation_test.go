@@ -10,7 +10,7 @@ func TestLabel(t *testing.T) {
 		"fuel_level_current_level":            "Fuel level",
 		"locked_state__rear_left_door":        "Rear left door lock",
 		"locked_state_front_engine_bonnet":    "Front engine bonnet lock",
-		"open_state_tailgate":                 "Tailgate open",
+		"open_state_tailgate":                 "Tailgate",
 		"safe_state_rear_right_door":          "Rear right door safety",
 		"state_front_left_door_window_lifter": "Front left window",
 		"state_sunroof_motor_hood_1":          "Sunroof motor hood 1",
@@ -25,6 +25,22 @@ func TestLabel(t *testing.T) {
 		if got := Label(in); got != want {
 			t.Errorf("Label(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestEnumErrata(t *testing.T) {
+	// open_state_front_right_door is documented with the lock codes in the published dictionary.
+	got := EnumFor("open_state_front_right_door", "Indicates if the front right door is locked (2) or unlocked (3)")
+	if got["2"] != "open" || got["3"] != "closed" {
+		t.Fatalf("open-state erratum: %v", got)
+	}
+	got = EnumFor("safe_state_tailgate", "Indicates the state of the tailgate unsupported (0) or invalid(1) or unsafe (3)")
+	if got["2"] != "safe" || got["3"] != "unsafe" {
+		t.Fatalf("safe-state erratum: %v", got)
+	}
+	// A lock signal keeps its own codes.
+	if got := EnumFor("locked_state_tailgate", "Indicates if the tailgate is locked (2) or unlocked (3)"); got["2"] != "locked" {
+		t.Fatalf("lock codes changed: %v", got)
 	}
 }
 

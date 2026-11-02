@@ -80,7 +80,7 @@ func scanSignal(r interface{ Scan(...any) error }) (Signal, error) {
 func (s *Signal) decorate() {
 	s.Label = dictionary.Label(s.Name)
 	if s.ValueKind == "number" || s.ValueKind == "unknown" {
-		s.Enum = dictionary.Enum(s.Description)
+		s.Enum = dictionary.EnumFor(s.Name, s.Description)
 	}
 }
 
