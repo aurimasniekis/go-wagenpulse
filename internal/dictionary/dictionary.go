@@ -7,6 +7,7 @@ package dictionary
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
@@ -195,6 +196,16 @@ func (svc *Service) load(ctx context.Context, d *Document, origin string, actor 
 	}
 	id := ids.New(ids.Dictionary)
 	err = svc.s.W().TxNamed(ctx, "dictionary.version", func(tx *store.Tx) error {
+		// Re-check inside the write transaction: another process (a server starting while an administrative command
+		// attaches, ADR-0027) may have loaded the same document since the read above.
+		var other string
+		switch err := tx.SQL.QueryRowContext(ctx, `SELECT id FROM dictionary_versions WHERE source_sha256 = ?`, d.SourceSHA256).Scan(&other); {
+		case err == nil:
+			existing.ID = other
+			return nil
+		case !errors.Is(err, sql.ErrNoRows):
+			return err
+		}
 		if _, err := tx.SQL.ExecContext(ctx, `INSERT INTO dictionary_versions (id, kind, title, document_version, document_date, source_sha256,
 			source_file, origin, entry_count, loaded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, d.Kind, d.Title, d.DocumentVersion,
 			d.DocumentDate, d.SourceSHA256, d.SourceFile, origin, len(d.Entries), tx.NowMicros()); err != nil {
@@ -206,6 +217,10 @@ func (svc *Service) load(ctx context.Context, d *Document, origin string, actor 
 	})
 	if err != nil {
 		return Version{}, false, err
+	}
+	if existing.ID != "" {
+		v, err := svc.GetVersion(ctx, existing.ID)
+		return v, false, err
 	}
 	for start := 0; start < len(d.Entries); start += batchSize {
 		end := min(start+batchSize, len(d.Entries))

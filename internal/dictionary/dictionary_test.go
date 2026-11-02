@@ -7,6 +7,7 @@ import (
 
 	"github.com/aurimasniekis/go-wagenpulse/internal/audit"
 	"github.com/aurimasniekis/go-wagenpulse/internal/keyring/keyringtest"
+	"github.com/aurimasniekis/go-wagenpulse/internal/store"
 	"github.com/aurimasniekis/go-wagenpulse/internal/store/storetest"
 )
 
@@ -66,5 +67,32 @@ func TestKindsAndUnits(t *testing.T) {
 		if got := NormalizeUnit(in); got != want {
 			t.Errorf("NormalizeUnit(%q) = %q want %q", in, got, want)
 		}
+	}
+}
+
+// ADR-0027: two processes (a starting server and an attached command) loading the bundled dictionaries at the same
+// time must not collide; each document is stored once.
+func TestConcurrentLoadAcrossProcesses(t *testing.T) {
+	ctx := context.Background()
+	owner := storetest.Open(t)
+	kr := keyringtest.Load(t, owner)
+	att, err := store.Open(ctx, store.Options{DataDir: owner.Dir(), AllowAttach: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = att.Close() }()
+	svcs := []*Service{New(owner, audit.NewWriter(kr)), New(att, audit.NewWriter(kr))}
+	errs := make(chan error, len(svcs))
+	for _, svc := range svcs {
+		go func() { errs <- svc.LoadBundled(ctx) }()
+	}
+	for range svcs {
+		if err := <-errs; err != nil {
+			t.Fatalf("concurrent load: %v", err)
+		}
+	}
+	var n int
+	if err := owner.ReadDB().QueryRow(`SELECT count(*) FROM dictionary_versions`).Scan(&n); err != nil || n != 2 {
+		t.Fatalf("versions=%d err=%v", n, err)
 	}
 }

@@ -49,8 +49,12 @@ func (a *App) initDomain(ctx context.Context) error {
 		return err
 	}
 	dict := dictionary.New(a.Store, a.Audit)
-	if err := dict.LoadBundled(ctx); err != nil {
-		return fmt.Errorf("loading bundled dictionaries: %w", err)
+	// Only the owner of the data directory does startup work; an attached administrative command (ADR-0027) must not
+	// race a server that is still starting.
+	if !a.Store.Attached() {
+		if err := dict.LoadBundled(ctx); err != nil {
+			return fmt.Errorf("loading bundled dictionaries: %w", err)
+		}
 	}
 	ing := ingest.New(a.Store, blobs, a.Audit, runner, a.Settings, ingest.Options{BatchSize: cfg.Ingest.BatchSize, Clock: a.Clock, Log: a.Log,
 		Metrics: a.Metrics, Limits: ingest.Limits{MaxExtractedBytes: cfg.Ingest.MaxExtractedBytes, MaxEntries: cfg.Ingest.MaxEntries,
