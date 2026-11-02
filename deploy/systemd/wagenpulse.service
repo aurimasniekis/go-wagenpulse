@@ -1,0 +1,78 @@
+# WagenPulse standalone deployment (systemd). Adapted from Porch deploy/systemd/porch.service (itself from HallPass; Apache-2.0, same author).
+# Install: deploy/systemd/README.md.
+#
+#   /usr/local/bin/wagenpulse          binary, root-owned 0755
+#   /etc/wagenpulse/wagenpulse.yaml         configuration (secret-free), root:wagenpulse 0640
+#   /etc/wagenpulse/kek                KEK, wagenpulse:wagenpulse 0400 (`wagenpulse keys init --out /etc/wagenpulse/kek`); never inside data_dir
+#   /var/lib/wagenpulse                data dir, wagenpulse:wagenpulse 0700 (StateDirectory)
+#
+# The KEK is read directly from /etc/wagenpulse/kek by a dedicated user. To use LoadCredential= instead, see README.md
+# ("LoadCredential"): kek.source: credential accepts systemd's group-readable credential files.
+# Check the sandbox on the target host with: systemd-analyze security wagenpulse.service
+
+[Unit]
+Description=WagenPulse vehicle telemetry and events
+Documentation=https://github.com/aurimasniekis/go-wagenpulse/tree/main/deploy/systemd
+After=network-online.target
+Wants=network-online.target
+# Refuse to start when the KEK or config is absent (WagenPulse would refuse too; this gives a clearer status).
+AssertPathExists=/etc/wagenpulse/kek
+AssertPathExists=/etc/wagenpulse/wagenpulse.yaml
+
+[Service]
+Type=simple
+User=wagenpulse
+Group=wagenpulse
+Environment=WAGENPULSE_CONFIG=/etc/wagenpulse/wagenpulse.yaml
+ExecStart=/usr/local/bin/wagenpulse serve
+# Pending database migrations run at startup after a pre-migration snapshot.
+Restart=on-failure
+RestartSec=5s
+KillSignal=SIGTERM
+KillMode=mixed
+TimeoutStopSec=30s
+TimeoutStartSec=120s
+LimitNOFILE=65536
+UMask=0077
+
+# Data directory: /var/lib/wagenpulse, owned by User=, mode 0700 (data_dir in wagenpulse.yaml must match).
+StateDirectory=wagenpulse
+StateDirectoryMode=0700
+
+# ---- Sandboxing -----------------------------------------------------------------------------------------------------
+NoNewPrivileges=yes
+# Listening on 8080/9464 needs no capabilities. To bind 443 directly (native TLS), add
+#   AmbientCapabilities=CAP_NET_BIND_SERVICE
+#   CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ReadWritePaths=/var/lib/wagenpulse
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+ProtectHostname=yes
+ProtectClock=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @mount @swap @reboot @raw-io @module @debug @cpu-emulation @obsolete
+SystemCallErrorNumber=EPERM
+DevicePolicy=closed
+KeyringMode=private
+
+[Install]
+WantedBy=multi-user.target

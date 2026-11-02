@@ -1,0 +1,113 @@
+# WagenPulse on Docker Compose (production-style). Adapted from Porch deploy/compose.yaml (Apache-2.0, same author).
+# Single instance: exactly one WagenPulse per data volume (SQLite + a data-directory lock), no replicas. See deploy/README.md.
+#
+# Quick start, from this directory:
+#
+#   1. Configuration: copy .env.example to .env and set WP_PUBLIC_URL (the https origin users see).
+#      wagenpulse.container.yaml is mounted as /etc/wagenpulse/wagenpulse.yaml; edit it (or WP_CONFIG_FILE) for anything else.
+#   2. KEK, once (outside the data volume, owned by the container user UID 65532, mode 0400):
+#        install -d -m 0700 secrets && sudo chown 65532:65532 secrets        # Docker Desktop: chown not needed
+#        docker compose --profile init run --rm keygen
+#      Back secrets/wagenpulse.kek up offline, separately from data backups. Losing it makes the database unreadable.
+#   3. docker compose up -d && docker compose ps            # waits for the HEALTHCHECK to report healthy
+#   4. Setup token for the root user (works while WagenPulse runs, ADR-0027), then open WP_PUBLIC_URL/setup:
+#        docker compose exec wagenpulse /usr/local/bin/wagenpulse admin setup-token
+#
+# Interpolation variables use the WP_ prefix on purpose: the wagenpulse binary rejects unknown WAGENPULSE_* variables, so a
+# WAGENPULSE_IMAGE exported in your shell would break a host-side `wagenpulse` run.
+#   WP_PUBLIC_URL (required)  WP_IMAGE  WP_VERSION  WP_CONFIG_FILE  WP_KEK_FILE  WP_HTTP_BIND  WP_HTTP_PORT
+#   WP_SUBNET  WP_TRUSTED_PROXIES
+#
+# The image runs as UID/GID 65532 with no shell. Compose `secrets:` with `file:` is a bind mount, so the host file's
+# owner and mode are what the container sees: WagenPulse refuses a KEK readable by group/others or owned by another UID.
+
+name: wagenpulse
+
+x-wagenpulse: &wagenpulse
+  image: ${WP_IMAGE:-wagenpulse}:${WP_VERSION:-local}
+  user: "65532:65532"
+  read_only: true
+  tmpfs:
+    - /tmp:size=16m,mode=1777
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  wagenpulse:
+    <<: *wagenpulse
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${WP_BUILD_VERSION:-dev}       # e.g. WP_BUILD_VERSION=$(git describe --tags --always --dirty)
+        COMMIT: ${WP_BUILD_COMMIT:-}
+    command: ["serve"]
+    restart: unless-stopped
+    # Longer than the HTTP drain so in-flight requests finish and SQLite closes cleanly.
+    stop_grace_period: 30s
+    environment:
+      WAGENPULSE_CONFIG: /etc/wagenpulse/wagenpulse.yaml
+      WAGENPULSE_PUBLIC_URL: ${WP_PUBLIC_URL:?set WP_PUBLIC_URL to the https origin users reach WagenPulse at}
+      # The reverse proxy's addresses (X-Forwarded-For is believed only from these). A proxy on the Docker host reaches
+      # the published port through the network gateway, which is inside WP_SUBNET.
+      WAGENPULSE_PROXY_TRUSTED_PROXIES: ${WP_TRUSTED_PROXIES:-172.30.215.0/24}
+    ports:
+      # Plain HTTP: expose it only to a TLS-terminating reverse proxy (default: host loopback).
+      - "${WP_HTTP_BIND:-127.0.0.1}:${WP_HTTP_PORT:-28090}:8080"
+    volumes:
+      - type: volume
+        source: wagenpulse-data
+        target: /var/lib/wagenpulse
+      - type: bind
+        source: ${WP_CONFIG_FILE:-./wagenpulse.container.yaml}
+        target: /etc/wagenpulse/wagenpulse.yaml
+        read_only: true
+    secrets:
+      - source: wagenpulse_kek
+        target: wagenpulse_kek     # -> /run/secrets/wagenpulse_kek (kek.file in wagenpulse.container.yaml)
+    # Same probe as the image HEALTHCHECK, faster at start-up. The management listener stays on container loopback.
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/wagenpulse", "healthcheck", "--url", "http://127.0.0.1:9464/readyz"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      start_interval: 2s
+      retries: 3
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    networks: [wagenpulse]
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # One-shot: generate the KEK into ./secrets (refuses to overwrite an existing file).
+  #   docker compose --profile init run --rm keygen
+  keygen:
+    <<: *wagenpulse
+    profiles: [init]
+    command: ["keys", "init", "--out", "/out/wagenpulse.kek"]
+    restart: "no"
+    network_mode: none
+    volumes:
+      - type: bind
+        source: ${WP_KEK_DIR:-./secrets}
+        target: /out
+
+volumes:
+  # Local named volume. Do not back it with NFS/SMB/FUSE: WagenPulse refuses network filesystems.
+  wagenpulse-data: {}
+
+networks:
+  wagenpulse:
+    ipam:
+      config:
+        - subnet: ${WP_SUBNET:-172.30.215.0/24}
+
+secrets:
+  wagenpulse_kek:
+    file: ${WP_KEK_FILE:-./secrets/wagenpulse.kek}

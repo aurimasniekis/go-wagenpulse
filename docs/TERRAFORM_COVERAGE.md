@@ -8,7 +8,7 @@ evidence from acceptance tests.
 |---|---|---|---|---|---|---|
 | Vehicle | `/api/v1/vehicles` CRUD | `wagenpulse_vehicle`, data `wagenpulse_vehicle` | vehicle ID or slug | destroy = archive (telemetry kept, ADR-0023) | none (VIN is sensitive-in-logs only) | planned |
 | Source (portal or upload) incl. collection schedule, request types, event policy, bound vehicles | `/api/v1/sources` CRUD | `wagenpulse_source` (nested `collection`, authoritative `vehicle_ids`) | source ID | destroy stops collection and deletes stored credentials; imported data kept | `password_wo`/`session_cookie_wo` + `credentials_wo_version`, or `password_ref` | planned |
-| Source authorization state | `/api/v1/sources/{id}/status` | data `wagenpulse_source_status` | — | read-only runtime | — | planned |
+| Source authorization state | `status` object of `GET /api/v1/sources/{id}` | data `wagenpulse_source_status` | — | read-only runtime | — | planned |
 | Event rule (conditions, filters, debounce, cooldown) | `/api/v1/rules` CRUD | `wagenpulse_event_rule` | rule ID | destroy soft-deletes; history kept | none | planned |
 | Pulse/NATS adapter | `/api/v1/adapters` CRUD | `wagenpulse_pulse_adapter` | adapter ID | destroy refused while deliveries pending unless `abandon_pending_on_destroy` | `creds_wo` + `creds_wo_version`, or `creds_ref` | planned |
 | Route (event → adapter binding) | `/api/v1/routes` CRUD | `wagenpulse_route` | route ID | destroy stops new deliveries only | none | planned |
@@ -28,7 +28,7 @@ evidence from acceptance tests.
 | Imports, collection runs, operations | Runtime processes; trigger them through the API/UI |
 | Generated events, deliveries, attempts | Runtime outputs; replay/retry are operational actions |
 | Upstream consent and portal data requests | Interactive and owned by VW's portal; cannot be automated legitimately |
-| Dictionary versions | Shipped with the binary or imported as data files (`wagenpulse dictionary import`) |
+| Dictionary versions | Shipped with the binary, or imported as data files through the UI/API (`POST /api/v1/uploads/dictionary`) |
 | Root user and the bootstrap token | Created once on the host (`wagenpulse admin setup-token`); Terraform authenticates with a token minted by root |
 | KEK, listeners, data directory, public URL | Deployment/bootstrap configuration (YAML/env), ADR-0004 |
 | Sessions, UI preferences (theme, table density) | Ephemeral, per browser |

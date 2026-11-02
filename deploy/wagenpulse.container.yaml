@@ -1,0 +1,30 @@
+# WagenPulse configuration for the container image. Baked into the image as /etc/wagenpulse/wagenpulse.yaml
+# (WAGENPULSE_CONFIG points there); mount your own copy read-only over it, or override single keys with
+# WAGENPULSE_<PATH> environment variables (e.g. WAGENPULSE_PUBLIC_URL, WAGENPULSE_PROXY_TRUSTED_PROXIES=172.30.0.0/24).
+# Unknown keys and unknown WAGENPULSE_* variables are rejected; `wagenpulse config env` lists every override.
+# Adapted from Porch deploy/porch.container.yaml (Apache-2.0, same author).
+#
+# Secret-free: the KEK is mounted separately (compose secret) and never lives in this file or in the data volume.
+
+mode: production
+data_dir: /var/lib/wagenpulse            # the data volume; 0700, owned by UID 65532
+# public_url is required and has no default: the externally reachable https origin (CSRF origin, OIDC redirect base).
+# Set it here or with WAGENPULSE_PUBLIC_URL=https://wagenpulse.example.com
+# public_url: https://wagenpulse.example.com
+
+kek:
+  source: file
+  file: /run/secrets/wagenpulse_kek      # compose secret; outside data_dir (enforced in production)
+
+http:
+  listen: 0.0.0.0:8080                   # plain HTTP behind a TLS-terminating reverse proxy (or set tls_cert_file/tls_key_file)
+
+management:
+  listen: 127.0.0.1:9464                 # metrics + /healthz + /readyz; loopback inside the container (HEALTHCHECK uses it)
+
+proxy:
+  trusted_proxies: []                    # CIDR(s) of the reverse proxy, e.g. the compose network range
+
+log:
+  level: info
+  format: json                           # stdout; collect with `docker logs` or your log driver

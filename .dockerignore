@@ -1,0 +1,35 @@
+# Build context for the Dockerfile. Adapted from Porch .dockerignore (Apache-2.0, same author).
+# Allowlist: everything is excluded unless re-included below, so local secrets, databases, KEK files, real samples and
+# VCS metadata never reach an image layer or the build cache.
+*
+
+!go.mod
+!go.sum
+!cmd/
+!internal/
+!web/
+!LICENSE
+!NOTICE
+!deploy/wagenpulse.container.yaml
+
+# Frontend: dependencies and build output are produced inside the build, never copied from the host.
+web/node_modules/
+web/test-results/
+web/playwright-report/
+web/blob-report/
+web/e2e/.auth/
+internal/webui/dist/
+
+# Never part of an image, even inside an allowlisted directory.
+bin/
+data/
+.git/
+testdata/local/
+**/*.kek
+**/kek
+**/dev-kek
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/*_test.go
+**/.DS_Store
