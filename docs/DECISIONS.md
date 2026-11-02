@@ -240,9 +240,25 @@ A daily job deletes in bounded batches and runs `incremental_vacuum`. Rollups ar
 
 ## ADR-0025 — Backup and restore
 
-`wagenpulse backup create` uses SQLite's online backup (`VACUUM INTO`) plus a copy of the blob directory into a
-timestamped directory with a manifest of SHA-256 sums; `backup verify` checks integrity and the manifest; `restore`
-refuses to run while the data directory is locked and requires an empty target. The KEK is never included.
+- `wagenpulse backup create --out DIR` works while the server runs (ADR-0027). It writes a SQLite `VACUUM INTO`
+  copy of the database, then copies every raw-delivery blob that copy marks present. It also writes `manifest.json`
+  with the size and SHA-256 of every file, the schema version, the app version and the installation ID.
+  - Blobs are written before their row commits, so a referenced blob can only be missing if retention removed it
+    during the backup. Such blobs are listed as `missing_blobs`; their observations are intact.
+  - Targets inside the data directory are refused.
+- `wagenpulse backup verify --dir DIR` exits with code 3 on any of these failures:
+  - an unsupported manifest format;
+  - a size or hash mismatch;
+  - unlisted or unsafe paths;
+  - a blob whose name differs from its content hash;
+  - a failed `integrity_check`;
+  - a schema version that differs from the manifest.
+- `wagenpulse restore --from DIR` first verifies the backup and refuses a schema newer than the binary. It then takes
+  the data-directory lock, so it fails while a server runs. The target must be empty. Pending migrations apply on the
+  next start.
+- The KEK is never included. A restored installation needs the KEK of the installation that wrote the backup.
+  - Development mode keeps a generated KEK inside the data directory. To restore a development backup, configure
+    that KEK file explicitly (`kek.file`).
 
 ## ADR-0026 — Rule evaluation semantics
 

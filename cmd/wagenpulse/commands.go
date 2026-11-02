@@ -46,6 +46,11 @@ func rootCommands() []*command {
 			{name: "setup-token", summary: "issue a single-use setup token to create the root user", run: runSetupToken},
 			{name: "reset-password", summary: "break-glass: set a new random local password for a user (prints it once)", run: runResetPassword},
 		}},
+		{name: "backup", summary: "consistent backups (database + raw deliveries; works while the server runs)", sub: []*command{
+			{name: "create", summary: "write a backup into a new directory", run: runBackupCreate},
+			{name: "verify", summary: "check a backup's manifest, checksums, database integrity and schema", run: runBackupVerify},
+		}},
+		{name: "restore", summary: "restore a verified backup into an empty data directory (server stopped)", run: runRestore},
 		{name: "audit", summary: "audit log tools", sub: []*command{
 			{name: "verify", summary: "verify the audit hash chain", run: runAuditVerify},
 		}},
