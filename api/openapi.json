@@ -2657,11 +2657,20 @@
           "description": {
             "type": "string"
           },
+          "enum": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
           "first_seen_at": {
             "format": "date-time",
             "type": "string"
           },
           "key": {
+            "type": "string"
+          },
+          "label": {
             "type": "string"
           },
           "last_seen_at": {
@@ -2698,7 +2707,8 @@
           "name",
           "value_kind",
           "clusters",
-          "origin"
+          "origin",
+          "label"
         ],
         "type": "object"
       },

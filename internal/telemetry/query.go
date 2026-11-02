@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/aurimasniekis/go-wagenpulse/internal/apperr"
+	"github.com/aurimasniekis/go-wagenpulse/internal/dictionary"
 	"github.com/aurimasniekis/go-wagenpulse/internal/store"
 )
 
@@ -43,6 +44,11 @@ type Signal struct {
 	FirstSeenAt  *time.Time `json:"first_seen_at,omitempty"`
 	LastSeenAt   *time.Time `json:"last_seen_at,omitempty"`
 	Num          int64      `json:"-"`
+	// Label is a human-friendly title derived from the dictionary name (presentation only).
+	Label string `json:"label"`
+	// Enum maps integer codes to the states the dictionary description documents ("2" → "locked"); absent when the
+	// description documents none.
+	Enum map[string]string `json:"enum,omitempty"`
 }
 
 const signalCols = `num, key, name, description, unit, unit_raw, data_type_raw, value_kind, clusters_json, origin, observed_name, first_seen_at, last_seen_at`
@@ -57,6 +63,7 @@ func scanSignal(r interface{ Scan(...any) error }) (Signal, error) {
 	}
 	s.Clusters = []string{}
 	_ = json.Unmarshal([]byte(cl), &s.Clusters)
+	s.decorate()
 	if first.Valid {
 		t := time.UnixMicro(first.Int64).UTC()
 		s.FirstSeenAt = &t
@@ -66,6 +73,15 @@ func scanSignal(r interface{ Scan(...any) error }) (Signal, error) {
 		s.LastSeenAt = &t
 	}
 	return s, nil
+}
+
+// decorate adds the presentation metadata derived from the dictionary (label, documented enum codes). Every code
+// path that returns a Signal calls it.
+func (s *Signal) decorate() {
+	s.Label = dictionary.Label(s.Name)
+	if s.ValueKind == "number" || s.ValueKind == "unknown" {
+		s.Enum = dictionary.Enum(s.Description)
+	}
 }
 
 // ErrSignalNotFound is returned for unknown signal keys.
@@ -198,6 +214,7 @@ func (r *Reader) LatestState(ctx context.Context, vehicleNum int64, now time.Tim
 		}
 		v.Signal.Clusters = []string{}
 		_ = json.Unmarshal([]byte(cl), &v.Signal.Clusters)
+		v.Signal.decorate()
 		v.ObservedAt, v.ReceivedAt = time.UnixMicro(at).UTC(), time.UnixMicro(recv).UTC()
 		if num.Valid {
 			v.Num = &num.Float64

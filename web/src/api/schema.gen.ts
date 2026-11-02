@@ -2248,9 +2248,13 @@ export interface components {
             clusters: string[];
             data_type?: string;
             description?: string;
+            enum?: {
+                [key: string]: string;
+            };
             /** Format: date-time */
             first_seen_at?: string;
             key: string;
+            label: string;
             /** Format: date-time */
             last_seen_at?: string;
             name: string;

@@ -5,19 +5,31 @@ import { axe } from './axe'
 
 // Interactive flows against the synthetic data created in global-setup.
 
-test('vehicle detail shows latest state, history chart and table', async ({ page }) => {
+test('vehicle overview decodes values; signal table, history chart and table', async ({ page }) => {
   await page.goto('/vehicles')
   await page.getByRole('link', { name: 'Test ID.4' }).click()
   await expect(page.getByRole('heading', { level: 1, name: /Test ID\.4/ })).toBeVisible()
   // The VIN is masked by default.
   await expect(page.getByText('•••••••••••000001')).toBeVisible()
-  const state = page.getByTestId('state-table')
-  await expect(state.getByText('hv_soc', { exact: true })).toBeVisible()
-  await expect(state.getByText('Not in the dictionary (observed key)')).toBeVisible()
+  // Overview (default tab): labels instead of keys, decoded codes, converted units, overdue service.
+  await expect(page.getByRole('tab', { name: 'Overview', selected: true })).toBeVisible()
+  await expect(page.getByText('Outside temperature').first()).toBeVisible()
+  await expect(page.getByText('15°C').first()).toBeVisible()
+  await expect(page.getByText('All locked')).toBeVisible()
+  await expect(page.getByText('12 d overdue').first()).toBeVisible()
   await axe(page)
-  await state.getByText('hv_soc', { exact: true }).click()
+  // All signals: label, raw key, decoded value.
+  await page.getByRole('tab', { name: 'All signals' }).click()
+  const state = page.getByTestId('state-table')
+  await expect(state.getByText('High-voltage battery charge', { exact: true })).toBeVisible()
+  await expect(state.getByText('hv_soc', { exact: true })).toBeVisible()
+  await expect(state.getByText('Tailgate lock', { exact: true })).toBeVisible()
+  await expect(state.getByRole('cell', { name: 'Locked', exact: true })).toBeVisible()
+  await expect(state.getByText(/not in the dictionary \(observed key\)/)).toBeVisible()
+  await axe(page)
+  await state.getByText('High-voltage battery charge', { exact: true }).click()
   await expect(page.getByRole('tab', { name: 'History', selected: true })).toBeVisible()
-  await expect(page.getByRole('img', { name: 'hv_soc history chart' })).toBeVisible()
+  await expect(page.getByRole('img', { name: 'High-voltage battery charge history chart' })).toBeVisible()
   await page.locator('label', { hasText: /^Table$/ }).click()
   await expect(page.getByRole('cell', { name: '34%' }).first()).toBeVisible()
   await axe(page)

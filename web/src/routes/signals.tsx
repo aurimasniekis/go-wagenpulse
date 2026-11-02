@@ -11,6 +11,7 @@ import { DefinitionList, EmptyBlock, PageHeader, QueryState, Section, Time } fro
 import { notifyError, notifySuccess } from '@/lib/notify'
 import { useCan } from '@/lib/session'
 import { AnchorLink } from '@/components/links'
+import { signalLabel } from '@/lib/signals'
 
 interface Search {
   q?: string
@@ -34,14 +35,17 @@ export const Route = createFileRoute('/signals')({
 const columns: ColumnDef<Signal>[] = [
   {
     header: 'Signal',
-    accessorKey: 'name',
+    accessorFn: (s) => signalLabel(s),
     cell: ({ row }) => (
       <div>
         <Text size="sm" fw={550}>
-          {row.original.name}
+          {signalLabel(row.original)}
         </Text>
         <Text size="xs" c="dimmed" lineClamp={1} maw={520}>
-          {row.original.description}
+          <Text span ff="monospace" size="xs">
+            {row.original.name}
+          </Text>
+          {row.original.description ? ` · ${row.original.description}` : ''}
         </Text>
       </div>
     ),
@@ -241,7 +245,7 @@ function Signals() {
         }}
         position="right"
         size="lg"
-        title={<Text fw={650}>{selected?.name ?? 'Signal'}</Text>}
+        title={<Text fw={650}>{selected ? signalLabel(selected) : 'Signal'}</Text>}
       >
         {selected ? <SignalDetail s={selected} /> : <SignalByKey k={search.key ?? ''} />}
       </Drawer>
@@ -276,6 +280,15 @@ function SignalDetail({ s }: { s: Signal }) {
                 : s.unit_raw || '—',
             ],
             ['Clusters', s.clusters.length ? s.clusters.join(', ') : '—'],
+            [
+              'Codes',
+              s.enum
+                ? Object.entries(s.enum)
+                    .sort(([x], [y]) => Number(x) - Number(y))
+                    .map(([k, v]) => `${k} = ${v}`)
+                    .join(', ')
+                : '—',
+            ],
             ['Name in deliveries', s.observed_name || '—'],
             ['First seen', <Time key="f" value={s.first_seen_at} />],
             ['Last seen', <Time key="l" value={s.last_seen_at} />],

@@ -3,6 +3,7 @@ import { useDebouncedValue } from '@mantine/hooks'
 import { keepPreviousData, useQueries, useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { api, unwrap, type Signal } from '@/api/client'
+import { signalLabel } from '@/lib/signals'
 
 /**
  * Multi-select over the signal dictionary: signals that have data come first; typing searches the whole dictionary
@@ -51,7 +52,7 @@ export function SignalPicker({
   const seenKeys = new Set(seen.data?.items.map((s) => s.key))
   const data = [...known.values()].map((s) => ({
     value: s.key,
-    label: `${s.name}${s.unit ? ` (${s.unit})` : ''}${seenKeys.has(s.key) ? '' : ' · no data yet'}`,
+    label: `${signalLabel(s)}${s.unit ? ` (${s.unit})` : ''}${seenKeys.has(s.key) ? '' : ' · no data yet'}`,
   }))
   for (const k of value) if (!known.has(k)) data.push({ value: k, label: k })
   return (

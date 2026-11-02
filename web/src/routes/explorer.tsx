@@ -4,7 +4,8 @@ import { useQueries, useQuery } from '@tanstack/react-query'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { api, exportUrl, unwrap, type Series } from '@/api/client'
 import { chartBase, EChart, usePalette, type EChartsOption } from '@/components/EChart'
-import { DEFAULT_RANGE_MS, ranges, useRangeEnd } from '@/components/SeriesChart'
+import { DEFAULT_RANGE_MS, ranges, toDisplaySeries, useRangeEnd } from '@/components/SeriesChart'
+import { signalLabel } from '@/lib/signals'
 import { EmptyBlock, ErrorBlock, LoadingBlock, PageHeader, Section } from '@/components/ui'
 import { fmtNumber } from '@/lib/format'
 import { useCan } from '@/lib/session'
@@ -57,13 +58,15 @@ function Explorer() {
     queries: pairs.map(({ v, s }) => ({
       queryKey: ['series', v, s, from.toISOString(), to.toISOString(), 1000],
       queryFn: async () =>
-        unwrap(
-          await api.GET('/vehicles/{vehicle}/series', {
-            params: {
-              path: { vehicle: v },
-              query: { signal: s, from: from.toISOString(), to: to.toISOString(), max_points: 1000 },
-            },
-          }),
+        toDisplaySeries(
+          unwrap(
+            await api.GET('/vehicles/{vehicle}/series', {
+              params: {
+                path: { vehicle: v },
+                query: { signal: s, from: from.toISOString(), to: to.toISOString(), max_points: 1000 },
+              },
+            }),
+          ),
         ),
     })),
   })
@@ -113,7 +116,9 @@ function Explorer() {
           />
           <MultiSelect
             label={`Signals (up to ${String(MAX_SIGNALS)})`}
-            data={signals.data.items.map((s) => ({ value: s.key, label: s.name }))}
+            data={signals.data.items
+              .map((s) => ({ value: s.key, label: signalLabel(s) }))
+              .sort((a, b) => a.label.localeCompare(b.label))}
             value={signalKeys}
             onChange={(v) => {
               set({ signals: v })
@@ -182,14 +187,14 @@ function Explorer() {
               <Section
                 key={key}
                 padded
-                title={info?.name ?? key}
+                title={info ? signalLabel(info) : key}
                 description={`${info?.description ?? ''}${gaps ? ` · ${fmtNumber(gaps)} empty bucket(s) shown as gaps` : ''}`}
               >
                 <div>
                   {points === 0 ? (
                     <EmptyBlock title="No data in this range" />
                   ) : (
-                    <EChart option={option} height={280} label={`${info?.name ?? key} across vehicles`} />
+                    <EChart option={option} height={280} label={`${info ? signalLabel(info) : key} across vehicles`} />
                   )}
                 </div>
               </Section>

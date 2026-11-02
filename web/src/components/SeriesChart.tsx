@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
 import { api, unwrap, type Series } from '@/api/client'
 import { fmtDateTime, fmtNumber, fmtValue } from '@/lib/format'
+import { displayNumber, displayUnit } from '@/lib/signals'
 import { chartBase, EChart, usePalette, type EChartsOption } from './EChart'
 import { EmptyBlock, ErrorBlock, LoadingBlock, ScrollRegion } from './ui'
 
@@ -41,17 +42,35 @@ export function useSeries(vehicle: string, signal: string, from: Date, to: Date,
   return useQuery({
     queryKey: ['series', vehicle, signal, from.toISOString(), to.toISOString(), maxPoints],
     queryFn: async () =>
-      unwrap(
-        await api.GET('/vehicles/{vehicle}/series', {
-          params: {
-            path: { vehicle },
-            query: { signal, from: from.toISOString(), to: to.toISOString(), max_points: maxPoints },
-          },
-        }),
+      toDisplaySeries(
+        unwrap(
+          await api.GET('/vehicles/{vehicle}/series', {
+            params: {
+              path: { vehicle },
+              query: { signal, from: from.toISOString(), to: to.toISOString(), max_points: maxPoints },
+            },
+          }),
+        ),
       ),
     enabled: Boolean(vehicle && signal),
     placeholderData: (prev) => prev,
   })
+}
+
+/** Converts a series' values into the display unit (e.g. deci-Kelvin → °C); stored data is unchanged. */
+export function toDisplaySeries(s: Series): Series {
+  if (displayUnit(s.unit) === (s.unit ?? '')) return s
+  const conv = (n: number | null | undefined) => (n === null || n === undefined ? n : displayNumber(s.unit, n))
+  return {
+    ...s,
+    unit: displayUnit(s.unit),
+    points: s.points.map((p) => ({
+      ...p,
+      value: conv(p.value) ?? null,
+      min: conv(p.min) ?? undefined,
+      max: conv(p.max) ?? undefined,
+    })),
+  }
 }
 
 /** Converts a series to chart options. Gaps stay gaps: empty buckets are null, never interpolated. */
@@ -119,6 +138,7 @@ export function SeriesChart({
   from,
   to,
   height = 300,
+  compact = false,
 }: {
   vehicle: string
   signal: string
@@ -126,6 +146,8 @@ export function SeriesChart({
   from: Date
   to: Date
   height?: number
+  /** Chart only: no aggregation badges and no chart/table switch (dashboard tiles). */
+  compact?: boolean
 }) {
   const q = useSeries(vehicle, signal, from, to)
   const palette = usePalette()
@@ -138,6 +160,15 @@ export function SeriesChart({
   if (q.isError) return <ErrorBlock error={q.error} onRetry={() => void q.refetch()} />
   const s = q.data
   const withValues = s.points.filter((p) => p.count > 0).length
+  if (compact) {
+    return withValues === 0 ? (
+      <Text size="sm" c="dimmed">
+        No data in the last 30 days.
+      </Text>
+    ) : option ? (
+      <EChart option={option} height={height} label={`${name} history chart`} />
+    ) : null
+  }
   return (
     <div>
       <Group justify="space-between" mb="xs" wrap="wrap" gap="xs">

@@ -24,6 +24,7 @@ import {
 import { fmtDuration, fmtNumber } from '@/lib/format'
 import { notifyError, notifySuccess } from '@/lib/notify'
 import { useCan } from '@/lib/session'
+import { signalLabel } from '@/lib/signals'
 
 export const Route = createFileRoute('/rules/$ruleId')({ component: RuleDetail })
 
@@ -320,7 +321,10 @@ function SignalNames({ keys }: { keys: string[] }) {
     queryKey: ['signals', 'seen'],
     queryFn: async () => unwrap(await api.GET('/signals', { params: { query: { only_seen: true, limit: 200 } } })),
   })
-  const name = (k: string) => signals.data?.items.find((s) => s.key === k)?.name
+  const name = (k: string) => {
+    const s = signals.data?.items.find((x) => x.key === k)
+    return s ? signalLabel(s) : undefined
+  }
   return (
     <Group gap={4}>
       {keys.map((k) => (

@@ -9,6 +9,9 @@ export const signals = {
   range: '153e8c40-4c6c-3c17-a11b-0ecc35d55b81', // cruising_range_combined, km
   charging: '9da735bb-c5d5-39f8-bf53-0fa2a367aa8f', // charging_state, String
   mileage: '41c0805c-43e5-313e-9dfb-356cb8d20f7c', // mileage, unsignedInt
+  tailgateLock: '95380872-847c-39d7-857f-17cdea1579ce', // locked_state_tailgate: locked (2) / unlocked (3)
+  outsideTemp: '6810b781-e54a-35e8-af98-fcdefb54bac6', // outside_temperature, deci-Kelvin
+  inspection: 'fd600221-7965-3396-96d7-82a840a2831c', // maintenance_interval__time_until_inspection, days
   unknown: '00000000-0000-3000-8000-00000000e2e0', // not in any dictionary
 }
 
@@ -33,6 +36,15 @@ export function syntheticDelivery(points = 24, end = Date.now()): string {
     dataFieldName: 'e2e_unknown_signal',
     value: '42',
     timestampUtc: new Date(end).toISOString(),
+  })
+  const last = new Date(end).toISOString()
+  data.push({ key: signals.tailgateLock, dataFieldName: 'locked_state_tailgate', value: '2', timestampUtc: last })
+  data.push({ key: signals.outsideTemp, dataFieldName: 'outside_temperature', value: '2881', timestampUtc: last }) // 15 °C
+  data.push({
+    key: signals.inspection,
+    dataFieldName: 'maintenance_interval__time_until_inspection',
+    value: '-12',
+    timestampUtc: last,
   })
   return JSON.stringify({ vin: SYNTHETIC_VIN, user_id: 'synthetic-user', Data: data })
 }

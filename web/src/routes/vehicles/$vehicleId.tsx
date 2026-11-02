@@ -33,6 +33,8 @@ import { api, check, ifMatch, unwrap, type StateValue } from '@/api/client'
 import { ConfirmDialog } from '@/components/Confirm'
 import { DEFAULT_RANGE_MS, ranges, useRangeEnd, SeriesChart } from '@/components/SeriesChart'
 import { DeliveryCounts } from '@/components/domain'
+import { VehicleOverview } from '@/components/VehicleOverview'
+import { presentValue, signalLabel } from '@/lib/signals'
 import {
   DefinitionList,
   EmptyBlock,
@@ -47,20 +49,22 @@ import {
   Time,
 } from '@/components/ui'
 import { brands, VehicleForm } from '@/components/VehicleForm'
-import { fmtDuration, fmtNumber, fmtValue, maskVIN } from '@/lib/format'
+import { fmtDuration, fmtNumber, maskVIN } from '@/lib/format'
 import { notifyError, notifySuccess } from '@/lib/notify'
 import { useCan } from '@/lib/session'
 import { AnchorLink } from '@/components/links'
 
 interface Search {
-  tab?: 'state' | 'history' | 'imports' | 'events'
+  tab?: 'overview' | 'state' | 'history' | 'imports' | 'events' | 'details'
   signal?: string
   range?: string
 }
 
 export const Route = createFileRoute('/vehicles/$vehicleId')({
   validateSearch: (s: Record<string, unknown>): Search => ({
-    tab: ['state', 'history', 'imports', 'events'].includes(s.tab as string) ? (s.tab as Search['tab']) : undefined,
+    tab: ['overview', 'state', 'history', 'imports', 'events', 'details'].includes(s.tab as string)
+      ? (s.tab as Search['tab'])
+      : undefined,
     signal: typeof s.signal === 'string' ? s.signal : undefined,
     range: typeof s.range === 'string' && s.range in ranges ? s.range : undefined,
   }),
@@ -141,10 +145,18 @@ function VehicleDetail() {
   if (vehicle.isPending) return <LoadingBlock h={320} />
   if (vehicle.isError) return <ErrorBlock error={vehicle.error} onRetry={() => void vehicle.refetch()} />
   const v = vehicle.data
-  const tab = search.tab ?? 'state'
+  const tab = search.tab ?? 'overview'
   const values = state.data?.values ?? []
   const fresh = values.filter((x) => !x.stale).length
-  const last = values.reduce<string | undefined>((m, x) => (!m || x.observed_at > m ? x.observed_at : m), undefined)
+  // When the car last captured data (its own timestamps) vs when WagenPulse last received a delivery for it.
+  const lastReport = values
+    .filter((x) => x.time_basis === 'observed')
+    .reduce<string | undefined>((m, x) => (!m || x.observed_at > m ? x.observed_at : m), undefined)
+  const lastReceived = values.reduce<string | undefined>(
+    (m, x) => (!m || x.received_at > m ? x.received_at : m),
+    undefined,
+  )
+  const pick = (key: string) => void navigate({ search: (s) => ({ ...s, tab: 'history', signal: key }) })
 
   return (
     <>
@@ -239,39 +251,44 @@ function VehicleDetail() {
       />
       <SimpleGrid cols={{ base: 2, md: 4 }} mb="lg">
         <Kpi
-          label="Last data"
-          value={last ? <Time value={last} relative /> : '—'}
-          hint={state.data ? `Stale after ${fmtDuration(state.data.stale_after_seconds)}` : undefined}
+          label="Car last reported"
+          value={lastReport ? <Time value={lastReport} relative /> : '—'}
+          hint="Capture time of the newest value"
+        />
+        <Kpi
+          label="Last delivery"
+          value={lastReceived ? <Time value={lastReceived} relative /> : '—'}
+          hint="When WagenPulse received data"
         />
         <Kpi label="Signals with data" value={fmtNumber(values.length)} />
         <Kpi
-          label="Fresh"
-          value={fmtNumber(fresh)}
-          color={values.length && fresh === 0 ? 'var(--wp-warning)' : undefined}
+          label="Up to date"
+          value={`${fmtNumber(fresh)} / ${fmtNumber(values.length)}`}
+          hint={state.data ? `Values newer than ${fmtDuration(state.data.stale_after_seconds)}` : undefined}
         />
-        <Kpi label="Stale" value={fmtNumber(values.length - fresh)} />
       </SimpleGrid>
       <Tabs
         value={tab}
-        onChange={(t) => void navigate({ search: (s) => ({ ...s, tab: (t ?? 'state') as Search['tab'] }) })}
+        onChange={(t) => void navigate({ search: (s) => ({ ...s, tab: (t ?? 'overview') as Search['tab'] }) })}
         keepMounted={false}
       >
         <Tabs.List mb="md">
-          <Tabs.Tab value="state">Current state</Tabs.Tab>
+          <Tabs.Tab value="overview">Overview</Tabs.Tab>
+          <Tabs.Tab value="state">All signals</Tabs.Tab>
           <Tabs.Tab value="history">History</Tabs.Tab>
           {can('imports.read') ? <Tabs.Tab value="imports">Imports</Tabs.Tab> : null}
           {can('events.read') ? <Tabs.Tab value="events">Events</Tabs.Tab> : null}
-          <Tabs.Tab value="details">Details</Tabs.Tab>
+          <Tabs.Tab value="details">Vehicle</Tabs.Tab>
         </Tabs.List>
+        <Tabs.Panel value="overview">
+          <QueryState query={state} loadingLabel="Loading the latest state…">
+            {() => <VehicleOverview vehicleId={v.id} values={values} onPick={pick} />}
+          </QueryState>
+        </Tabs.Panel>
         <Tabs.Panel value="state">
           <Card p={0}>
             <QueryState query={state} loadingLabel="Loading the latest state…">
-              {() => (
-                <StateTable
-                  values={values}
-                  onPick={(key) => void navigate({ search: (s) => ({ ...s, tab: 'history', signal: key }) })}
-                />
-              )}
+              {() => <StateTable values={values} onPick={pick} />}
             </QueryState>
           </Card>
         </Tabs.Panel>
@@ -411,9 +428,12 @@ function StateTable({ values, onPick }: { values: StateValue[]; onPick: (key: st
     .filter((v) => !cluster || v.signal.clusters.includes(cluster))
     .filter(
       (v) =>
-        !q || `${v.signal.name} ${v.signal.description ?? ''} ${v.signal.key}`.toLowerCase().includes(q.toLowerCase()),
+        !q ||
+        `${signalLabel(v.signal)} ${v.signal.name} ${v.signal.description ?? ''} ${v.signal.key}`
+          .toLowerCase()
+          .includes(q.toLowerCase()),
     )
-    .sort((a, b) => a.signal.name.localeCompare(b.signal.name))
+    .sort((a, b) => signalLabel(a.signal).localeCompare(signalLabel(b.signal)))
   if (values.length === 0)
     return (
       <EmptyBlock
@@ -468,16 +488,18 @@ function StateTable({ values, onPick }: { values: StateValue[]; onPick: (key: st
               >
                 <Table.Td>
                   <Text size="sm" fw={550}>
-                    {v.signal.name}
+                    {signalLabel(v.signal)}
                   </Text>
                   <Text size="xs" c="dimmed" lineClamp={1} maw={480}>
-                    {v.signal.origin === 'observed' ? 'Not in the dictionary (observed key)' : v.signal.description}
+                    <Text span ff="monospace" size="xs">
+                      {v.signal.name}
+                    </Text>
+                    {' · '}
+                    {v.signal.origin === 'observed' ? 'not in the dictionary (observed key)' : v.signal.description}
                   </Text>
                 </Table.Td>
                 <Table.Td className="wp-num">
-                  <Text size="sm" c={v.quality === 'ok' ? undefined : 'dimmed'}>
-                    {fmtValue({ ...v, unit: v.unit ?? v.signal.unit })}
-                  </Text>
+                  <ValueText v={v} />
                 </Table.Td>
                 <Table.Td>
                   <Time value={v.observed_at} relative />
@@ -515,7 +537,7 @@ function HistoryPanel({
   onChange: (p: Partial<Search>) => void
 }) {
   const options = values
-    .map((v) => ({ value: v.signal.key, label: v.signal.name }))
+    .map((v) => ({ value: v.signal.key, label: signalLabel(v.signal) }))
     .sort((a, b) => a.label.localeCompare(b.label))
   const key = signal ?? values.find((v) => v.signal.value_kind === 'number')?.signal.key ?? options[0]?.value
   const selected = values.find((v) => v.signal.key === key)
@@ -554,7 +576,7 @@ function HistoryPanel({
         <SeriesChart
           vehicle={vehicleId}
           signal={key}
-          name={selected?.signal.name ?? key}
+          name={selected ? signalLabel(selected.signal) : key}
           from={from}
           to={to}
           height={320}
@@ -674,5 +696,15 @@ function VehicleEvents({ vehicleId }: { vehicleId: string }) {
         }
       </QueryState>
     </Card>
+  )
+}
+
+function ValueText({ v }: { v: StateValue }) {
+  const p = presentValue(v.signal, { ...v, unit: v.unit ?? v.signal.unit })
+  const raw = v.num !== undefined && p.state ? `code ${String(v.num)}` : undefined
+  return (
+    <Text size="sm" c={p.muted ? 'dimmed' : p.overdue ? 'var(--wp-danger)' : undefined} title={raw}>
+      {p.text}
+    </Text>
   )
 }
