@@ -29,7 +29,7 @@ web: ## Build the web UI into internal/webui/dist (embedded into the binary)
 	cd web && pnpm install --frozen-lockfile && pnpm build
 
 image: ## Build the container image
-	docker build --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) --build-arg DATE=$(DATE) -t $(IMAGE):$(VERSION) .
+	docker build --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) --build-arg BUILD_DATE=$(DATE) -t $(IMAGE):$(VERSION) .
 
 dev: build-go ## Run a development instance (data in .wagenpulse/, UI via `cd web && pnpm dev`)
 	@mkdir -p .wagenpulse
