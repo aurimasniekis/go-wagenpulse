@@ -3,6 +3,7 @@ package adapters_test
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"path/filepath"
 	"strings"
@@ -254,5 +255,101 @@ func TestAdapterValidationAndTest(t *testing.T) {
 	res, _ = strict.Test(ctx, audit.System, a.ID)
 	if res.OK {
 		t.Fatalf("loopback destination allowed: %+v", res)
+	}
+}
+
+// Crash recovery (ADR-0015): a process that dies mid-delivery leaves the row "processing" with a lease. After a restart
+// (a new Manager), expired leases are reclaimed. A message that had already reached JetStream before the crash is
+// published again with the same Nats-Msg-Id and acknowledged as a duplicate, so the stream still holds it once.
+func TestCrashMidDeliveryIsRecovered(t *testing.T) {
+	p := setup(t)
+	ctx := context.Background()
+	creds := string(p.nats.CredsBytes("wagenpulse", pulsetest.Grants{Publish: []string{"evt.wagenpulse.>"}}))
+	a, err := p.adapts.Create(ctx, audit.System, adapters.Input{Name: "pulse", Enabled: true, Creds: &creds,
+		Config: adapters.PulseConfig{URL: p.nats.URL, PublishTimeoutMS: 1000, MaxAttempts: 5}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule, err := p.rules.Create(ctx, audit.System, rules.Input{Name: "SoC high", Enabled: true, Definition: rules.Definition{Kind: rules.KindThreshold,
+		SignalKeys: []string{keySOC}, Direction: "above", Threshold: 80, Severity: "info"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.routes.Create(ctx, audit.System, routes.Input{Name: "r", Enabled: true, AdapterID: a.ID, RuleIDs: []string{rule.ID}}); err != nil {
+		t.Fatal(err)
+	}
+	crash := func(num int64) {
+		t.Helper()
+		// What a SIGKILL during the attempt leaves behind: claimed, attempt counted, lease not yet expired... until now.
+		if err := p.s.W().Tx(ctx, func(tx *store.Tx) error {
+			_, err := tx.SQL.ExecContext(ctx, `UPDATE deliveries SET state = 'processing', succeeded_at = NULL, ack_stream = NULL, ack_seq = NULL,
+				ack_duplicate = NULL, lease_until = ?, attempts = attempts + 1 WHERE num = ?`, time.Now().Add(-time.Second).UnixMicro(), num)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deliveryNums := func() []int64 {
+		rows, err := p.s.ReadDB().QueryContext(ctx, `SELECT num FROM deliveries ORDER BY num`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = rows.Close() }()
+		var out []int64
+		for rows.Next() {
+			var n int64
+			_ = rows.Scan(&n)
+			out = append(out, n)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	state := func(num int64) (st string, dup bool) {
+		var d sql.NullInt64
+		_ = p.s.ReadDB().QueryRowContext(ctx, `SELECT state, ack_duplicate FROM deliveries WHERE num = ?`, num).Scan(&st, &d)
+		return st, d.Valid && d.Int64 == 1
+	}
+
+	// 1. Published, then the process died before recording the acknowledgement.
+	run1, stop1 := context.WithCancel(ctx)
+	go p.mgr.Run(run1)
+	p.ingest(t, "publish", false, "70", "90")
+	waitFor(t, "first delivery", func() bool { return len(p.nats.Stored("evt.wagenpulse.>")) == 1 })
+	nums := deliveryNums()
+	waitFor(t, "first delivery recorded", func() bool { s, _ := state(nums[0]); return s == "succeeded" })
+	stop1()
+	time.Sleep(100 * time.Millisecond)
+	crash(nums[0])
+
+	// 2. Claimed, then the process died before publishing (no message reached JetStream).
+	p.ingest(t, "publish", false, "60", "95")
+	nums = deliveryNums()
+	if len(nums) != 2 {
+		t.Fatalf("deliveries %v", nums)
+	}
+	crash(nums[1])
+
+	// Restart: a fresh manager on the same database.
+	guard, _ := netguard.NewWithOptions(netguard.Options{AllowCIDRs: []string{"127.0.0.1/32"}})
+	mgr2 := adapters.NewManager(p.adapts, adapters.ManagerOptions{Guard: guard, InstallationID: "ins_test", BaseBackoff: 50 * time.Millisecond,
+		MaxBackoff: 200 * time.Millisecond, Poll: 20 * time.Millisecond})
+	run2, stop2 := context.WithCancel(ctx)
+	defer stop2()
+	go mgr2.Run(run2)
+	waitFor(t, "both deliveries recovered", func() bool {
+		s0, _ := state(nums[0])
+		s1, _ := state(nums[1])
+		return s0 == "succeeded" && s1 == "succeeded"
+	})
+	if _, dup := state(nums[0]); !dup {
+		t.Fatal("re-published message should be acknowledged as a JetStream duplicate")
+	}
+	if _, dup := state(nums[1]); dup {
+		t.Fatal("a never-published message must not be a duplicate")
+	}
+	if got := len(p.nats.Stored("evt.wagenpulse.>")); got != 2 {
+		t.Fatalf("stream holds %d messages, want 2 (no duplicate stored)", got)
 	}
 }

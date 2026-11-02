@@ -93,6 +93,28 @@ func (m *Manager) pulseFactory(a Adapter, creds []byte, onState func(bool, strin
 		}})
 }
 
+// ReleaseOrphanedLeases makes deliveries left "processing" by a crashed process due at once (see
+// jobs.Runner.ReleaseOrphanedLeases). An attempt that reached JetStream before the crash is published again with the
+// same Nats-Msg-Id and acknowledged as a duplicate inside the stream's dedupe window.
+func (m *Manager) ReleaseOrphanedLeases(ctx context.Context) (int64, error) {
+	if m.svc.s.Attached() {
+		return 0, errors.New("adapters: an attached process must not release leases")
+	}
+	var n int64
+	err := m.svc.s.W().TxNamed(ctx, "deliveries.release_orphans", func(tx *store.Tx) error {
+		res, err := tx.SQL.ExecContext(ctx, `UPDATE deliveries SET lease_until = ?, updated_at = ? WHERE state = 'processing'`, tx.NowMicros()-1, tx.NowMicros())
+		if err != nil {
+			return err
+		}
+		n, err = res.RowsAffected()
+		return err
+	})
+	if n > 0 {
+		m.log.Warn("recovering deliveries interrupted by an unclean shutdown", slog.Int64("deliveries", n))
+	}
+	return n, err
+}
+
 // Reload asks the manager to reconcile workers with the configuration.
 func (m *Manager) Reload() {
 	select {

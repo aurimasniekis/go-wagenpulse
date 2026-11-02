@@ -109,6 +109,28 @@ func NewRunner(s *store.Store, opts Options) *Runner {
 	return &Runner{s: s, opts: opts, log: obs.Component(opts.Logger, "jobs"), kinds: map[string]kindConfig{}, wake: make(chan struct{}, 1)}
 }
 
+// ReleaseOrphanedLeases makes jobs left "running" by a crashed process claimable at once instead of after their lease
+// expires. Only the process that owns the data directory may call it, before it starts running jobs: the lock
+// guarantees that no other runner holds those leases.
+func (r *Runner) ReleaseOrphanedLeases(ctx context.Context) (int64, error) {
+	if r.s.Attached() {
+		return 0, errors.New("jobs: an attached process must not release leases")
+	}
+	var n int64
+	err := r.s.W().TxNamed(ctx, "jobs.release_orphans", func(tx *store.Tx) error {
+		res, err := tx.SQL.ExecContext(ctx, `UPDATE jobs SET lease_until = ?, updated_at = ? WHERE state = 'running'`, tx.NowMicros()-1, tx.NowMicros())
+		if err != nil {
+			return err
+		}
+		n, err = res.RowsAffected()
+		return err
+	})
+	if n > 0 {
+		r.log.Warn("recovering jobs interrupted by an unclean shutdown", slog.Int64("jobs", n))
+	}
+	return n, err
+}
+
 // Purge deletes finished jobs last updated before before. Queued and running jobs are never removed.
 func (r *Runner) Purge(ctx context.Context, before time.Time) (int64, error) {
 	var n int64

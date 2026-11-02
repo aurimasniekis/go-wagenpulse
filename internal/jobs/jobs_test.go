@@ -130,6 +130,27 @@ func TestExpiredLeaseReclaimed(t *testing.T) {
 	}
 }
 
+// A crashed predecessor's lease (far from expiry) is released at startup, so the job runs immediately.
+func TestOrphanedLeaseReleasedAtStartup(t *testing.T) {
+	s, r, ctx := newRunner(t)
+	var calls atomic.Int32
+	r.Register("crash", 3, 0, func(context.Context, Job) error { calls.Add(1); return nil })
+	id := enqueue(t, s, r, "crash", EnqueueOptions{})
+	if err := s.W().Exec(context.Background(), "UPDATE jobs SET state='running', attempts=1, lease_until=? WHERE id=?",
+		time.Now().Add(time.Hour).UnixMicro(), id); err != nil {
+		t.Fatal(err)
+	}
+	n, err := r.ReleaseOrphanedLeases(ctx)
+	if err != nil || n != 1 {
+		t.Fatalf("released=%d err=%v", n, err)
+	}
+	go r.Run(ctx)
+	j := waitState(t, s, id, "done")
+	if calls.Load() != 1 || j.Attempts != 2 {
+		t.Fatalf("calls=%d attempts=%d", calls.Load(), j.Attempts)
+	}
+}
+
 func TestUnregisteredKindStaysQueued(t *testing.T) {
 	s, r, ctx := newRunner(t)
 	go r.Run(ctx)

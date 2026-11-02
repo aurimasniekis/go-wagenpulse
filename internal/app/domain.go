@@ -73,8 +73,19 @@ func (a *App) initDomain(ctx context.Context) error {
 		Adapters: adapts, Dispatch: mgr}
 	a.Domain.RunRetention = func(ctx context.Context) (any, error) { return a.runRetention(ctx) }
 	a.workers = append(a.workers,
-		runner.Run,
-		mgr.Run,
+		func(ctx context.Context) {
+			// This process owns the data directory: anything still leased was left by a crashed predecessor.
+			if _, err := runner.ReleaseOrphanedLeases(ctx); err != nil {
+				a.Log.Error("releasing orphaned job leases failed; they recover when the leases expire", obs.Err(err))
+			}
+			runner.Run(ctx)
+		},
+		func(ctx context.Context) {
+			if _, err := mgr.ReleaseOrphanedLeases(ctx); err != nil {
+				a.Log.Error("releasing orphaned delivery leases failed; they recover when the leases expire", obs.Err(err))
+			}
+			mgr.Run(ctx)
+		},
 		func(ctx context.Context) {
 			periodic(ctx, a.component("collector"), "collector_schedule", 30*time.Second, collector.Schedule)
 		},
