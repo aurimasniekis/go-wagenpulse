@@ -13,7 +13,7 @@ IMAGE        ?= ghcr.io/aurimasniekis/wagenpulse
 
 .DEFAULT_GOAL := help
 .PHONY: help build build-go web web-check test race vet lint fmt-check fuzz-smoke vuln secrets check clean \
-        sqlc sqlc-check api api-check bench e2e image dictionaries dev
+        sqlc sqlc-check api api-check bench e2e image dictionaries dev dev-setup-token dev-cli
 
 help: ## List targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -31,10 +31,19 @@ web: ## Build the web UI into internal/webui/dist (embedded into the binary)
 image: ## Build the container image
 	docker build --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) --build-arg BUILD_DATE=$(DATE) -t $(IMAGE):$(VERSION) .
 
+# Environment of the development instance; every host-side command against it needs the same settings.
+DEV_ENV := WAGENPULSE_MODE=development WAGENPULSE_DATA_DIR=$(CURDIR)/.wagenpulse/data WAGENPULSE_PUBLIC_URL=http://localhost:8080 \
+	WAGENPULSE_SECRETS_FILE_DIRS=$(CURDIR)/.wagenpulse/secrets
+
 dev: build-go ## Run a development instance (data in .wagenpulse/, UI via `cd web && pnpm dev`)
 	@mkdir -p .wagenpulse
-	WAGENPULSE_MODE=development WAGENPULSE_DATA_DIR=$(CURDIR)/.wagenpulse/data WAGENPULSE_PUBLIC_URL=http://localhost:8080 \
-	  WAGENPULSE_SECRETS_FILE_DIRS=$(CURDIR)/.wagenpulse/secrets $(BIN)/wagenpulse serve
+	$(DEV_ENV) $(BIN)/wagenpulse serve
+
+dev-setup-token: ## Issue a setup token for the development instance (works while `make dev` runs)
+	@$(DEV_ENV) $(BIN)/wagenpulse admin setup-token
+
+dev-cli: ## Run any command against the development instance: make dev-cli ARGS="backup create --out /tmp/b"
+	@$(DEV_ENV) $(BIN)/wagenpulse $(ARGS)
 
 # ---- checks ------------------------------------------------------------------
 

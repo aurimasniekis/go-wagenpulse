@@ -128,7 +128,7 @@ Known limitations:
 
 ```sh
 make build && make dev                     # http://localhost:8080 (development mode)
-bin/wagenpulse admin setup-token           # then open /setup
+make dev-setup-token                       # in another terminal, then open /setup
 ```
 
 For production, see [operator/install.md](operator/install.md). For Terraform, build the provider (`make install` in
