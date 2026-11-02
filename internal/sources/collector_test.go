@@ -189,10 +189,39 @@ func TestPasswordLoginAndChallenge(t *testing.T) {
 	if e.portal.Hits["/u/login"] != logins {
 		t.Fatal("stored session was not reused")
 	}
-	// A bot challenge is never bypassed.
+	// A captcha the identity provider actually demands is never solved or bypassed: one credential POST, rejected,
+	// then the source waits for the owner.
 	e.portal.Set(func(p *fakeportal.Portal) { p.Captcha, p.SessionCookie = true, "rotated" })
+	posts := e.portal.Hits["/u/login"]
 	if got := e.runOnce(t, src.ID); got.Status.State != "reauthorization_required" || got.Status.LastErrorClass != "challenge" {
 		t.Fatalf("captcha: %+v", got.Status)
+	}
+	if n := e.portal.Hits["/u/login"] - posts; n != 2 { // the sign-in page GET and a single credential POST
+		t.Fatalf("captcha flow hit /u/login %d times, want 2 (no retries)", n)
+	}
+	// A challenge page in place of the sign-in form stops before any credentials are sent.
+	e.portal.Set(func(p *fakeportal.Portal) { p.Captcha, p.Interstitial, p.SessionCookie = false, true, "rotated-again" })
+	posts = e.portal.Hits["/u/login"]
+	if got := e.runOnce(t, src.ID); got.Status.State != "reauthorization_required" || got.Status.LastErrorClass != "challenge" {
+		t.Fatalf("interstitial: %+v", got.Status)
+	}
+	if e.portal.Hits["/u/login"] != posts {
+		t.Fatal("credentials were sent to a challenge page")
+	}
+}
+
+// Regression: Auth0's sign-in page always ships captcha scripts and an empty widget container. That alone is not a
+// challenge; the login must proceed (it was refused before any attempt).
+func TestCaptchaMarkupIsNotAChallenge(t *testing.T) {
+	e := newEnv(t)
+	e.portal.Set(func(p *fakeportal.Portal) {
+		p.Email, p.Password = "owner@example.com", "portal-password"
+		p.Requests[vin] = map[string]string{"partial": "req-1"}
+	})
+	user := "owner@example.com"
+	src := e.source(t, AuthPassword, "portal-password", &user)
+	if got := e.runOnce(t, src.ID); got.Status.State != "authorized" {
+		t.Fatalf("login with captcha markup on the page: %+v", got.Status)
 	}
 }
 

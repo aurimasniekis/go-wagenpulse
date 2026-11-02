@@ -35,8 +35,11 @@ type Portal struct {
 	// RateLimit makes the next N data requests answer 429 with Retry-After seconds.
 	RateLimit      int
 	RetryAfterSecs int
-	// Captcha makes the sign-in page show a bot challenge.
+	// Captcha makes the sign-in form demand a captcha answer (Auth0 bot detection triggered); a credential POST
+	// without one is rejected.
 	Captcha bool
+	// Interstitial serves a bot-challenge page instead of the sign-in form (a CDN challenge in front of the IdP).
+	Interstitial bool
 	// Hits counts requests by path prefix.
 	Hits map[string]int
 	// UserAgents seen.
@@ -81,16 +84,22 @@ func (p *Portal) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case path == "/oidc/v1/authorize":
+		if p.Interstitial {
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = fmt.Fprint(w, `<html><head><title>Just a moment...</title></head><body><div id="cf-chl-widget"></div></body></html>`)
+			return
+		}
 		http.Redirect(w, r, "/u/login?state=abc&redirect="+r.URL.Query().Get("redirect_uri"), http.StatusFound)
 	case path == "/u/login" && r.Method == http.MethodGet:
 		w.Header().Set("Content-Type", "text/html")
-		if p.Captcha {
-			_, _ = fmt.Fprint(w, `<html><body>Please complete the CAPTCHA</body></html>`)
-			return
-		}
-		_, _ = fmt.Fprintf(w, `<html><form method="post" action="/u/login?state=abc"><input type="hidden" name="state" value="abc"><input name="username"><input name="password"></form></html>`)
+		_, _ = fmt.Fprint(w, p.loginPage(""))
 	case path == "/u/login" && r.Method == http.MethodPost:
 		_ = r.ParseForm()
+		if p.Captcha && r.PostForm.Get("captcha") == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = fmt.Fprint(w, p.loginPage("Solve the challenge question to verify you are not a robot."))
+			return
+		}
 		if r.PostForm.Get("username") != p.Email || r.PostForm.Get("password") != p.Password {
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = fmt.Fprint(w, `<html>Wrong email or password</html>`)
@@ -115,6 +124,22 @@ func (p *Portal) serve(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// loginPage imitates Auth0 Universal Login. Like the real page it always loads the captcha script and an empty widget
+// container, whether or not a captcha is required; only a triggered challenge adds the widget's site key and the
+// captcha input.
+func (p *Portal) loginPage(errMsg string) string {
+	widget := ""
+	if p.Captcha {
+		widget = `<div class="ulp-captcha" data-captcha-sitekey="fake-site-key" data-captcha-provider="recaptcha_v2"></div><input type="hidden" name="captcha" value="">`
+	}
+	if errMsg != "" {
+		errMsg = `<span class="ulp-input-error-message">` + errMsg + `</span>`
+	}
+	return `<html><head><script src="/u/assets/captcha.js"></script><style>.ulp-captcha-container{display:none}</style></head><body>` +
+		`<form method="post" action="/u/login?state=abc"><input type="hidden" name="state" value="abc"><input name="username"><input name="password">` +
+		`<div class="ulp-captcha-container">` + widget + `</div>` + errMsg + `</form></body></html>`
 }
 
 func (p *Portal) api(w http.ResponseWriter, r *http.Request) {

@@ -102,6 +102,7 @@ Last reviewed: 2026-11-02.
 | 2026-11-02 | `internal/ingest` `TestRealSamples` over the 17 owner-supplied ZIPs (`WAGENPULSE_REAL_SAMPLES` glob; data stays outside the repository) with the bundled dictionaries | 17 files → 1 stored delivery + 16 byte-identical duplicates; 64 observations accepted; 62 described by the Continuous dictionary, 2 stored as `observed` signals; 0 rejected, 0 warnings |
 | 2026-11-02 | `tools/dictgen` over both dictionary PDFs | Continuous: 1141 entries (v1.0.0, 2025-09-11); Historical: 5140 entries — matching the unique key counts of the PDFs |
 | 2026-11-02 | Collector against `fakeportal` (synthetic imitation of E4–E6 behaviour) | cookie and password (Auth0 page) modes, checkpoints, `no_content`, 429/Retry-After, expired session, bot challenge refusal — **not** a live verification |
+| 2026-11-02 | Live owner test, password mode: the collector stopped with "bot challenge" before submitting credentials | **Our bug.** The check matched captcha scripts that Auth0's sign-in page always loads. The E4 client (HA_VAG-EU-Data-Act) submits the form without such a pre-check. A challenge is now detected only from a captcha the form actually demands, a challenge page served instead of the form, or a rejected submission. Retest pending |
 
 ## Unresolved gaps and what would close them
 

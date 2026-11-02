@@ -56,14 +56,15 @@ func PasswordLogin(email, password string) func(ctx context.Context, c *Client) 
 		if status >= 400 {
 			return &Error{Class: ClassUnavailable, Status: status, Msg: "the identity provider did not serve a sign-in page"}
 		}
-		if challenged(page) {
-			return &Error{Class: ClassChallenge, Msg: "the identity provider presented a bot challenge; sign in with a browser and use a session cookie"}
-		}
+		// Submit the form as the browser would. Whether a captcha is required is decided by the identity provider's
+		// answer (or a challenge page instead of the form), never by strings that the sign-in page always contains.
 		switch {
 		case strings.Contains(finalURL, "/u/login"):
 			err = c.auth0Login(ctx, page, finalURL, email, password)
 		case strings.Contains(finalURL, "/signin-service/"):
 			err = c.classicLogin(ctx, page, finalURL, email, password)
+		case challenged(page):
+			return &Error{Class: ClassChallenge, Msg: "the identity provider presented a bot challenge; sign in with a browser and use a session cookie"}
 		default:
 			return &Error{Class: ClassProtocol, Msg: "the identity provider served an unknown sign-in page"}
 		}
@@ -176,10 +177,18 @@ var (
 	attrNameR = regexp.MustCompile(`(?is)\bname\s*=\s*"([^"]*)"`)
 	attrValR  = regexp.MustCompile(`(?is)\bvalue\s*=\s*"([^"]*)"`)
 	formActR  = regexp.MustCompile(`(?is)<form\b[^>]*\baction\s*=\s*"([^"]*)"`)
-	captchaRe = regexp.MustCompile(`(?i)captcha|are you (a )?human|verify you are|hcaptcha|recaptcha|arkose|bot.?detection`)
+	// captchaFieldRe matches what a page carries only when a captcha answer is actually demanded: a captcha input or
+	// a widget site key. Sign-in pages load captcha scripts and empty containers on every visit, so the bare word
+	// "captcha" is not evidence of a challenge.
+	captchaFieldRe = regexp.MustCompile(`(?is)<input\b[^>]*\bname\s*=\s*"(captcha|g-recaptcha-response|h-captcha-response|cf-turnstile-response|fc-token|arkose[^"]*)"|\bdata-(captcha-)?sitekey\s*=`)
+	// interstitialRe matches a challenge page served instead of a sign-in form.
+	interstitialRe = regexp.MustCompile(`(?is)<title>\s*just a moment|cf-chl|challenge-platform|are you (a )?human\?|verify you are human`)
 )
 
-func challenged(html string) bool { return captchaRe.MatchString(html) }
+// challenged reports whether a page demands a captcha answer or is a bot-challenge interstitial.
+func challenged(html string) bool {
+	return captchaFieldRe.MatchString(html) || interstitialRe.MatchString(html)
+}
 
 func parseForm(html string) (string, map[string]string) {
 	fields := map[string]string{}
