@@ -1,0 +1,251 @@
+// Login flows adapted from go-cupra internal/cupra/eudataact/login.go (same author) and the community-documented
+// VW Identity sign-in sequence (docs/CAPABILITIES.md E4–E6).
+
+package vwdataact
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"net/url"
+	"regexp"
+	"strings"
+)
+
+// AuthorizeURL builds the portal's OIDC authorization URL (the portal is the confidential client and exchanges the
+// code at its /login callback).
+func (c *Client) AuthorizeURL() (string, error) {
+	b, ok := Brands[c.cfg.Brand]
+	if !ok {
+		return "", &Error{Class: ClassAuth, Msg: "unknown brand for password login"}
+	}
+	key := c.cfg.StateKey
+	if key == "" {
+		key = b.StateKey
+	}
+	if key == "" {
+		return "", &Error{Class: ClassAuth, Msg: "password login for this brand needs the portal brand key (portal_brand_key); " +
+			"copy it from the portal's login URL (state=country__language__BRANDKEY) or use a session cookie"}
+	}
+	country, lang := strings.ToLower(c.cfg.Country), strings.ToLower(c.cfg.Language)
+	q := url.Values{}
+	q.Set("client_id", b.ClientID)
+	q.Set("response_type", "code")
+	q.Set("scope", "openid cars profile")
+	q.Set("state", country+"__"+lang+"__"+key)
+	q.Set("redirect_uri", c.cfg.BaseURL+"/login")
+	q.Set("prompt", "login")
+	return strings.TrimRight(c.cfg.IdentityBase, "/") + "/oidc/v1/authorize?" + q.Encode(), nil
+}
+
+// PasswordLogin returns a login function that signs in with the owner's brand account. It supports the two sign-in
+// pages the identity provider is documented to serve (Auth0 Universal Login and the classic signin-service). It never
+// solves CAPTCHAs, never accepts terms or consent on the user's behalf and never retries a rejected password.
+func PasswordLogin(email, password string) func(ctx context.Context, c *Client) error {
+	return func(ctx context.Context, c *Client) error {
+		authorize, err := c.AuthorizeURL()
+		if err != nil {
+			return err
+		}
+		page, finalURL, status, err := c.fetch(ctx, http.MethodGet, authorize, nil, c.cfg.BaseURL+"/")
+		if err != nil {
+			return err
+		}
+		if status >= 400 {
+			return &Error{Class: ClassUnavailable, Status: status, Msg: "the identity provider did not serve a sign-in page"}
+		}
+		if challenged(page) {
+			return &Error{Class: ClassChallenge, Msg: "the identity provider presented a bot challenge; sign in with a browser and use a session cookie"}
+		}
+		switch {
+		case strings.Contains(finalURL, "/u/login"):
+			err = c.auth0Login(ctx, page, finalURL, email, password)
+		case strings.Contains(finalURL, "/signin-service/"):
+			err = c.classicLogin(ctx, page, finalURL, email, password)
+		default:
+			return &Error{Class: ClassProtocol, Msg: "the identity provider served an unknown sign-in page"}
+		}
+		if err != nil {
+			return err
+		}
+		// The redirect chain ends at the portal, which sets its session cookies. Verify the session.
+		if _, err := c.Vehicles(ctx); err != nil {
+			if ClassOf(err) == ClassAuth {
+				return &Error{Class: ClassAuth, Msg: "sign-in did not establish a portal session (wrong password, pending terms or consent?)"}
+			}
+			return err
+		}
+		return nil
+	}
+}
+
+func (c *Client) auth0Login(ctx context.Context, page, pageURL, email, password string) error {
+	action, fields := parseForm(page)
+	form := url.Values{}
+	for k, v := range fields {
+		form.Set(k, v)
+	}
+	form.Set("username", email)
+	form.Set("password", password)
+	if form.Get("action") == "" {
+		form.Set("action", "default")
+	}
+	post := resolve(pageURL, action)
+	body, final, status, err := c.fetch(ctx, http.MethodPost, post, form, pageURL)
+	if err != nil {
+		return err
+	}
+	return c.afterSubmit(body, final, status)
+}
+
+var templateModelRe = regexp.MustCompile(`(?s)templateModel\s*:\s*(\{.*?\})\s*,\s*\n`)
+var csrfRe = regexp.MustCompile(`csrf_token\s*:\s*'([^']{1,200})'`)
+
+func (c *Client) classicLogin(ctx context.Context, page, pageURL, email, password string) error {
+	action, fields := parseForm(page)
+	if fields["_csrf"] == "" || fields["hmac"] == "" {
+		return &Error{Class: ClassProtocol, Msg: "the classic sign-in form changed (missing _csrf/hmac)"}
+	}
+	form := url.Values{}
+	for k, v := range fields {
+		form.Set(k, v)
+	}
+	form.Set("email", email)
+	body, final, status, err := c.fetch(ctx, http.MethodPost, resolve(pageURL, action), form, pageURL)
+	if err != nil {
+		return err
+	}
+	if status >= 400 {
+		return &Error{Class: ClassAuth, Status: status, Msg: "the identity provider rejected the account identifier"}
+	}
+	if challenged(body) {
+		return &Error{Class: ClassChallenge, Msg: "the identity provider presented a bot challenge; use a session cookie"}
+	}
+	m := templateModelRe.FindStringSubmatch(body)
+	if m == nil {
+		return &Error{Class: ClassProtocol, Msg: "the password page changed (no templateModel)"}
+	}
+	var tm struct {
+		HMAC       string `json:"hmac"`
+		RelayState string `json:"relayState"`
+		PostAction string `json:"postAction"`
+		Error      string `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(m[1]), &tm); err != nil || tm.HMAC == "" || tm.PostAction == "" {
+		return &Error{Class: ClassProtocol, Msg: "the password page changed (templateModel)"}
+	}
+	if tm.Error != "" {
+		return &Error{Class: ClassAuth, Msg: "the identity provider rejected the account"}
+	}
+	csrf := fields["_csrf"]
+	if cm := csrfRe.FindStringSubmatch(body); cm != nil {
+		csrf = cm[1]
+	}
+	pw := url.Values{}
+	pw.Set("_csrf", csrf)
+	pw.Set("relayState", tm.RelayState)
+	pw.Set("hmac", tm.HMAC)
+	pw.Set("email", email)
+	pw.Set("password", password)
+	body, final2, status, err := c.fetch(ctx, http.MethodPost, resolve(final, tm.PostAction), pw, final)
+	if err != nil {
+		return err
+	}
+	return c.afterSubmit(body, final2, status)
+}
+
+// afterSubmit interprets where the credential POST ended.
+func (c *Client) afterSubmit(body, final string, status int) error {
+	switch {
+	case challenged(body):
+		return &Error{Class: ClassChallenge, Msg: "the identity provider presented a bot challenge; use a session cookie"}
+	case strings.Contains(final, "/terms") || strings.Contains(final, "/consent") || strings.Contains(final, "marketing"):
+		return &Error{Class: ClassAuth, Msg: "the account has pending terms or consent; sign in once in a browser to review them"}
+	case strings.HasPrefix(final, c.cfg.BaseURL):
+		return nil
+	case status >= 400 || strings.Contains(final, "error") || strings.Contains(final, "/login/authenticate"):
+		return &Error{Class: ClassAuth, Status: status, Msg: "the identity provider rejected the credentials"}
+	}
+	return nil // verified by the caller through a portal request
+}
+
+var (
+	inputRe   = regexp.MustCompile(`(?is)<input\b[^>]*>`)
+	attrNameR = regexp.MustCompile(`(?is)\bname\s*=\s*"([^"]*)"`)
+	attrValR  = regexp.MustCompile(`(?is)\bvalue\s*=\s*"([^"]*)"`)
+	formActR  = regexp.MustCompile(`(?is)<form\b[^>]*\baction\s*=\s*"([^"]*)"`)
+	captchaRe = regexp.MustCompile(`(?i)captcha|are you (a )?human|verify you are|hcaptcha|recaptcha|arkose|bot.?detection`)
+)
+
+func challenged(html string) bool { return captchaRe.MatchString(html) }
+
+func parseForm(html string) (string, map[string]string) {
+	fields := map[string]string{}
+	action := ""
+	if m := formActR.FindStringSubmatch(html); m != nil {
+		action = m[1]
+	}
+	for _, tag := range inputRe.FindAllString(html, 200) {
+		nm := attrNameR.FindStringSubmatch(tag)
+		if nm == nil {
+			continue
+		}
+		val := ""
+		if vm := attrValR.FindStringSubmatch(tag); vm != nil {
+			val = strings.ReplaceAll(vm[1], "&amp;", "&")
+		}
+		fields[nm[1]] = val
+	}
+	return action, fields
+}
+
+func resolve(base, ref string) string {
+	b, err := url.Parse(base)
+	if err != nil {
+		return ref
+	}
+	r, err := url.Parse(ref)
+	if err != nil {
+		return ref
+	}
+	return b.ResolveReference(r).String()
+}
+
+// fetch performs a browser-like request following redirects and returns the body, the final URL and the status.
+func (c *Client) fetch(ctx context.Context, method, rawURL string, form url.Values, referer string) (string, string, int, error) {
+	if err := c.pace(ctx); err != nil {
+		return "", "", 0, err
+	}
+	var body io.Reader
+	if form != nil {
+		body = strings.NewReader(form.Encode())
+	}
+	req, err := http.NewRequestWithContext(ctx, method, rawURL, body)
+	if err != nil {
+		return "", "", 0, err
+	}
+	req.Header.Set("User-Agent", c.cfg.UserAgent)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml")
+	if referer != "" {
+		req.Header.Set("Referer", referer)
+	}
+	if form != nil {
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", "", 0, ctx.Err()
+		}
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			return "", "", 0, &Error{Class: ClassUnavailable, Msg: "network error during sign-in"}
+		}
+		return "", "", 0, &Error{Class: ClassUnavailable, Msg: "network error during sign-in"}
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	return string(b), resp.Request.URL.String(), resp.StatusCode, nil
+}

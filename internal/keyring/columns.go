@@ -9,4 +9,8 @@ var Columns = []Column{
 	FieldColumn("users", "id", "totp_secret_enc", PurposeField),
 	FieldColumn("oidc_providers", "id", "client_secret_enc", PurposeField),
 	FieldColumn("oidc_login_states", "id", "secrets_enc", PurposeField),
+	FieldColumn("sources", "id", "username_enc", PurposeField),
+	FieldColumn("sources", "id", "secret_enc", PurposeField),
+	FieldColumn("sources", "id", "session_enc", PurposeField),
+	FieldColumn("adapters", "id", "creds_enc", PurposeField),
 }

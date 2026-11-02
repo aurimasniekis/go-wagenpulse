@@ -17,16 +17,16 @@ Key references: `docs/DECISIONS.md`, `docs/CAPABILITIES.md`, `docs/STORAGE.md`, 
 
 | # | Scope | Status | Evidence |
 |---|---|---|---|
-| M0 | Planning docs, repo hygiene, tooling, CI skeleton | in progress | |
-| M1 | Core platform: config, logging/redaction, store + migrations, ids, apperr, keyring/secretref, health/metrics, `serve`, graceful shutdown | todo | |
-| M2 | Auth: bootstrap, local login, sessions, CSRF, throttling, TOTP, RBAC, API tokens, audit, OIDC; web shell + admin screens | todo | |
+| M0 | Planning docs, repo hygiene, tooling, CI skeleton | done | commit 165c671 |
+| M1 | Core platform: config, logging/redaction, store + migrations, ids, apperr, keyring/secretref, health/metrics, `serve`, graceful shutdown | done | `go test ./...`, golangci-lint 0 issues |
+| M2 | Auth: bootstrap, local login, sessions, CSRF, throttling, TOTP, RBAC, API tokens, audit, OIDC; web shell + admin screens | backend done; UI in progress | internal/auth, internal/auth/oidc, internal/app tests |
 | M3 | Terraform provider repo scaffold + client + acceptance harness; user/token/settings/OIDC resources | todo | |
-| M4 | Dictionaries: dictgen, bundled JSON, versioned tables, unit registry, signals API | todo | |
-| M5 | Vehicles, sources, jobs/scheduler, safe importer, parser, normalization, observations/state; imports UI; vehicle/source resources | todo | |
-| M6 | Unofficial portal collector (cookie + scripted login), auth states, rate limiting, checkpoints; collection health UI | todo | |
-| M7 | Queries/aggregation/rollups; fleet, vehicle, explorer screens; CSV export | todo | |
-| M8 | Rules, events, routes, dispatcher, Pulse adapter; rules/adapters/events UIs; provider resources | todo | |
-| M9 | Retention, purge, backup/restore, audit UI, system info; retention resource | todo | |
+| M4 | Dictionaries: dictgen, bundled JSON, versioned tables, unit registry, signals API | done | internal/dictionary tests; 1141/5140 entries |
+| M5 | Vehicles, sources, jobs/scheduler, safe importer, parser, normalization, observations/state; imports UI; vehicle/source resources | backend done | internal/ingest tests incl. real samples; UI and provider pending |
+| M6 | Unofficial portal collector (cookie + scripted login), auth states, rate limiting, checkpoints; collection health UI | backend done (not live-verified) | internal/sources tests against fakeportal |
+| M7 | Queries/aggregation/rollups; fleet, vehicle, explorer screens; CSV export | backend done | UI pending |
+| M8 | Rules, events, routes, dispatcher, Pulse adapter; rules/adapters/events UIs; provider resources | backend done | internal/adapters integration test with embedded NATS in Pulse operator mode |
+| M9 | Retention, purge, backup/restore, audit UI, system info; retention resource | retention + purge done; backup pending | |
 | M10 | Hardening: benchmarks, race, crash/restart, e2e + axe in both themes, docs, Dockerfile, release, provider example, final report | todo | |
 
 ## Definition of done

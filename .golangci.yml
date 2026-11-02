@@ -65,6 +65,8 @@ linters:
         linters: [forbidigo]
       - path: _test\.go
         linters: [gosec, noctx, bodyclose, contextcheck]
+      - path: (fakeportal|fakeidp|pulsetest)/
+        linters: [gosec, noctx]
     paths:
       - tools/analyzers/.*/testdata
       - internal/store/db

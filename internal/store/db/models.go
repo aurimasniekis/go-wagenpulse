@@ -8,6 +8,32 @@ import (
 	"database/sql"
 )
 
+type Adapter struct {
+	ID                string
+	Name              string
+	Kind              string
+	Enabled           int64
+	ConfigJson        string
+	CredsEnc          []byte
+	CredsRef          sql.NullString
+	SecretFingerprint string
+	Revision          int64
+	CreatedAt         int64
+	UpdatedAt         int64
+}
+
+type AdapterStatus struct {
+	AdapterID      string
+	State          string
+	Reason         string
+	LastOkAt       sql.NullInt64
+	LastErrorAt    sql.NullInt64
+	LastErrorClass string
+	LastTestAt     sql.NullInt64
+	LastTestResult string
+	UpdatedAt      int64
+}
+
 type ApiToken struct {
 	ID             string
 	Lookup         string
@@ -49,6 +75,85 @@ type AuditEvent struct {
 	Hash        []byte
 }
 
+type Delivery struct {
+	Num            int64
+	ID             string
+	EventNum       int64
+	AdapterID      sql.NullString
+	AdapterName    string
+	RouteID        sql.NullString
+	ReplaySeq      int64
+	ReplayOf       sql.NullString
+	MsgID          string
+	Subject        string
+	State          string
+	Attempts       int64
+	MaxAttempts    int64
+	NextAttemptAt  int64
+	LeaseUntil     sql.NullInt64
+	LastErrorClass string
+	LastError      string
+	SucceededAt    sql.NullInt64
+	AckStream      sql.NullString
+	AckSeq         sql.NullInt64
+	AckDuplicate   sql.NullInt64
+	DeadReason     string
+	CreatedAt      int64
+	UpdatedAt      int64
+}
+
+type DeliveryAttempt struct {
+	DeliveryNum  int64
+	Attempt      int64
+	StartedAt    int64
+	FinishedAt   int64
+	Outcome      string
+	ErrorClass   string
+	ErrorMessage string
+	AckSeq       sql.NullInt64
+	AckDuplicate sql.NullInt64
+	DurationMs   int64
+}
+
+type DictionaryEntry struct {
+	VersionID    string
+	Key          string
+	Name         string
+	Description  string
+	Unit         string
+	DataType     string
+	ClustersJson string
+}
+
+type DictionaryVersion struct {
+	ID              string
+	Kind            string
+	Title           string
+	DocumentVersion string
+	DocumentDate    string
+	SourceSha256    string
+	SourceFile      string
+	Origin          string
+	EntryCount      int64
+	LoadedAt        int64
+}
+
+type Event struct {
+	Num           int64
+	ID            string
+	Type          string
+	RuleID        sql.NullString
+	RuleRevision  sql.NullInt64
+	VehicleNum    sql.NullInt64
+	SignalNum     sql.NullInt64
+	ObservedAt    int64
+	CreatedAt     int64
+	Backfill      int64
+	ImportID      sql.NullString
+	CorrelationID string
+	PayloadJson   string
+}
+
 type IdempotencyKey struct {
 	KeyMac         []byte
 	RequestHash    []byte
@@ -63,6 +168,50 @@ type IdempotencyKey struct {
 	Etag           string
 	CreatedAt      int64
 	ExpiresAt      int64
+}
+
+type Import struct {
+	ID                     string
+	Kind                   string
+	SourceID               sql.NullString
+	VehicleNum             sql.NullInt64
+	State                  string
+	EventPolicy            string
+	Backfill               int64
+	FilesTotal             int64
+	FilesDone              int64
+	DeliveriesDuplicate    int64
+	DeliveriesRejected     int64
+	DeliveriesUnrecognized int64
+	ObservationsAccepted   int64
+	ObservationsDuplicate  int64
+	ObservationsRejected   int64
+	Corrections            int64
+	UnknownSignals         int64
+	LateSkipped            int64
+	EventsCreated          int64
+	EventsPreviewed        int64
+	CoverageFrom           sql.NullInt64
+	CoverageTo             sql.NullInt64
+	WarningsJson           string
+	ErrorCode              string
+	ErrorMessage           string
+	CreatedBy              string
+	CorrelationID          string
+	CreatedAt              int64
+	StartedAt              sql.NullInt64
+	FinishedAt             sql.NullInt64
+	UpdatedAt              int64
+}
+
+type ImportDelivery struct {
+	ImportID    string
+	DeliveryNum int64
+	Position    int64
+	Outcome     string
+	Accepted    int64
+	Duplicates  int64
+	Message     string
 }
 
 type Installation struct {
@@ -100,6 +249,19 @@ type KeyringKey struct {
 	UpdatedAt int64
 }
 
+type LatestState struct {
+	VehicleNum  int64
+	SignalNum   int64
+	ObservedAt  int64
+	ReceivedAt  int64
+	Num         sql.NullFloat64
+	Text        sql.NullString
+	Quality     string
+	Unit        string
+	DeliveryNum int64
+	TimeBasis   string
+}
+
 type LoginChallenge struct {
 	ID        string
 	TokenMac  []byte
@@ -114,6 +276,33 @@ type LoginThrottle struct {
 	Failures      int64
 	NextAllowedAt int64
 	UpdatedAt     int64
+}
+
+type Observation struct {
+	VehicleNum  int64
+	SignalNum   int64
+	ObservedAt  int64
+	ValueHash   int64
+	ReceivedAt  int64
+	Num         sql.NullFloat64
+	Text        sql.NullString
+	Quality     string
+	Unit        string
+	Raw         sql.NullString
+	DeliveryNum int64
+	TimeBasis   string
+}
+
+type ObservationRollup struct {
+	VehicleNum  int64
+	SignalNum   int64
+	BucketStart int64
+	N           int64
+	Min         sql.NullFloat64
+	Max         sql.NullFloat64
+	Sum         sql.NullFloat64
+	LastNum     sql.NullFloat64
+	LastAt      int64
 }
 
 type OidcLoginState struct {
@@ -167,6 +356,104 @@ type Operation struct {
 	UpdatedAt     int64
 }
 
+type RawDelivery struct {
+	Num              int64
+	ID               string
+	Sha256           []byte
+	Size             int64
+	Origin           string
+	SourceID         sql.NullString
+	VehicleNum       sql.NullInt64
+	OriginalName     string
+	RequestType      sql.NullString
+	PublishedAt      sql.NullInt64
+	ReceivedAt       int64
+	Format           string
+	Fingerprint      string
+	Status           string
+	ObservationCount int64
+	TimeFrom         sql.NullInt64
+	TimeTo           sql.NullInt64
+	Error            string
+	BlobPresent      int64
+	RetentionUntil   sql.NullInt64
+	CreatedBy        string
+}
+
+type RemoteFile struct {
+	SourceID    string
+	Vin         string
+	RequestType string
+	Name        string
+	CreatedOn   sql.NullInt64
+	Size        sql.NullInt64
+	Outcome     string
+	DeliveryNum sql.NullInt64
+	FetchedAt   int64
+}
+
+type Route struct {
+	ID              string
+	Name            string
+	Enabled         int64
+	AdapterID       string
+	EventTypesJson  string
+	IncludeBackfill int64
+	Revision        int64
+	CreatedAt       int64
+	UpdatedAt       int64
+}
+
+type RouteRule struct {
+	RouteID string
+	RuleID  string
+}
+
+type RouteVehicle struct {
+	RouteID    string
+	VehicleNum int64
+}
+
+type Rule struct {
+	ID              string
+	Name            string
+	Description     string
+	Enabled         int64
+	Kind            string
+	CurrentRevision int64
+	DeletedAt       sql.NullInt64
+	Revision        int64
+	CreatedAt       int64
+	UpdatedAt       int64
+}
+
+type RuleRevision struct {
+	RuleID         string
+	Revision       int64
+	DefinitionJson string
+	CreatedBy      string
+	CreatedAt      int64
+}
+
+type RuleSignal struct {
+	RuleID    string
+	SignalKey string
+}
+
+type RuleState struct {
+	RuleID         string
+	VehicleNum     int64
+	SignalNum      int64
+	Revision       int64
+	RefNum         sql.NullFloat64
+	RefText        sql.NullString
+	LastObservedAt sql.NullInt64
+	Active         int64
+	Pending        int64
+	LastFiredAt    sql.NullInt64
+	UpdatedAt      int64
+}
+
 type Session struct {
 	ID                string
 	TokenMac          []byte
@@ -197,6 +484,68 @@ type SetupToken struct {
 	CreatedAt int64
 	ExpiresAt int64
 	UsedAt    sql.NullInt64
+}
+
+type Signal struct {
+	Num                 int64
+	Key                 string
+	Name                string
+	Description         string
+	UnitRaw             string
+	Unit                string
+	DataTypeRaw         string
+	ValueKind           string
+	ClustersJson        string
+	Origin              string
+	DictionaryVersionID sql.NullString
+	ObservedName        string
+	FirstSeenAt         sql.NullInt64
+	LastSeenAt          sql.NullInt64
+	UpdatedAt           int64
+}
+
+type Source struct {
+	ID                    string
+	Name                  string
+	Kind                  string
+	Enabled               int64
+	Brand                 string
+	PortalBrandKey        string
+	Country               string
+	Language              string
+	AuthMode              string
+	UsernameEnc           []byte
+	SecretEnc             []byte
+	SecretRef             sql.NullString
+	SecretFingerprint     string
+	SessionEnc            []byte
+	CollectContinuous     int64
+	CollectHistorical     int64
+	IntervalMinutes       int64
+	LiveEventPolicy       string
+	HistoricalEventPolicy string
+	Revision              int64
+	CreatedAt             int64
+	UpdatedAt             int64
+}
+
+type SourceStatus struct {
+	SourceID            string
+	State               string
+	StateReason         string
+	LastAttemptAt       sql.NullInt64
+	LastSuccessAt       sql.NullInt64
+	LastDeliveryAt      sql.NullInt64
+	NextRunAt           sql.NullInt64
+	RetryAfter          sql.NullInt64
+	ConsecutiveFailures int64
+	LastErrorClass      string
+	UpdatedAt           int64
+}
+
+type SourceVehicle struct {
+	SourceID   string
+	VehicleNum int64
 }
 
 type StoreSpaceProbe struct {
@@ -238,4 +587,23 @@ type UserRecoveryCode struct {
 	CodeMac   []byte
 	UsedAt    sql.NullInt64
 	CreatedAt int64
+}
+
+type Vehicle struct {
+	Num               int64
+	ID                string
+	Slug              string
+	DisplayName       string
+	Vin               string
+	Brand             string
+	Model             string
+	ModelYear         sql.NullInt64
+	LicensePlate      string
+	Notes             string
+	TagsJson          string
+	StaleAfterMinutes sql.NullInt64
+	ArchivedAt        sql.NullInt64
+	Revision          int64
+	CreatedAt         int64
+	UpdatedAt         int64
 }

@@ -76,7 +76,7 @@ func (a *App) APIDeps() *api.Deps {
 	return &api.Deps{Log: a.Log, Version: buildinfo.Get().Version, Origin: a.Cfg.PublicOrigin(), SecureCookies: a.Cfg.SecureCookies(),
 		Store: a.Store, Keyring: a.Keyring, Audit: a.Audit, Auth: a.Auth, OIDC: a.OIDC, Settings: a.Settings, Metrics: a.Metrics,
 		Clock: a.Clock, Ready: a.Ready, StartedAt: a.StartedAt, LoginRate: httpx.NewLimiter(a.Clock, 20, 10),
-		TokenRate: httpx.NewLimiter(a.Clock, 600, 120), InstallationID: a.InstallationID, Extra: a.domainRegistrations(), Domain: a.Domain}
+		TokenRate: httpx.NewLimiter(a.Clock, 600, 120), InstallationID: a.InstallationID, Extra: a.domainRegistrations(), D: a.Domain}
 }
 
 // PublicHandler is the handler for the public listener.

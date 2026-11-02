@@ -9,6 +9,7 @@ package api
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -61,8 +62,8 @@ type Deps struct {
 	StartedAt     time.Time
 	LoginRate     *httpx.Limiter
 	TokenRate     *httpx.Limiter
-	Extra         []func(huma.API, *Deps) // domain registrations
-	Domain        any                     // domain service bundle (see domain.go)
+	Extra         []func(huma.API, *Deps) // additional registrations
+	D             *Domain                 // domain services (nil when only generating the OpenAPI document)
 	// InstallationID identifies this installation (event sources, diagnostics).
 	InstallationID string
 }
@@ -129,6 +130,15 @@ func New(mux *http.ServeMux, d *Deps) huma.API {
 	registerSettings(api, d)
 	registerOIDCProviders(api, d)
 	registerAudit(api, d)
+	registerVehicles(api, d)
+	registerSignals(api, d)
+	registerSources(api, d)
+	registerImports(api, d)
+	registerRules(api, d)
+	registerAdapters(api, d)
+	registerRoutes(api, d)
+	registerEvents(api, d)
+	registerOverview(api, d)
 	for _, fn := range d.Extra {
 		fn(api, d)
 	}
@@ -403,4 +413,70 @@ func statusFor(c apperr.Code) int {
 // sessionMeta builds session metadata from the request in ctx.
 func sessionMeta(ctx context.Context, userAgent string) auth.SessionMeta {
 	return auth.SessionMeta{IP: audit.MetaFrom(ctx).SourceIP, UserAgent: userAgent}
+}
+
+// AuthenticateHTTP authenticates a plain (non-Huma) handler request with the same rules as API operations: bearer
+// token (never merged with a session) or session + Origin + CSRF for unsafe methods, then the permission check.
+// It returns a problem document (with status) on failure.
+func (d *Deps) AuthenticateHTTP(r *http.Request, perm auth.Permission) (*auth.Principal, *Problem) {
+	ip := httpx.ClientIP(r.Context()).String()
+	var p *auth.Principal
+	if bearer, ok := bearerToken(r); ok {
+		if d.TokenRate != nil && !d.TokenRate.Allow(tokenRateKey(bearer)) {
+			return nil, problem(http.StatusTooManyRequests, apperr.CodeRateLimited, "too many requests for this token", nil)
+		}
+		tp, err := d.Auth.AuthenticateToken(r.Context(), bearer, ip)
+		if err != nil {
+			return nil, problem(http.StatusUnauthorized, apperr.CodeUnauthorized, "invalid, expired or revoked API token", nil)
+		}
+		p = tp
+	} else {
+		if !httpx.IsSafeMethod(r.Method) && !httpx.SameOrigin(r, d.Origin) {
+			return nil, problem(http.StatusForbidden, apperr.CodeForbidden, "cross-origin request refused", nil)
+		}
+		sp, err := d.Auth.Authenticate(r.Context(), auth.SessionFromRequest(r))
+		if err != nil {
+			return nil, problem(http.StatusUnauthorized, apperr.CodeUnauthorized, "authentication required", nil)
+		}
+		if !httpx.IsSafeMethod(r.Method) && !d.Auth.VerifyCSRF(sp, r.Header.Get(CSRFHeader)) {
+			return nil, problem(http.StatusForbidden, "csrf_failed", "missing or invalid CSRF token", nil)
+		}
+		if sp.MustEnrollTOTP {
+			return nil, problem(http.StatusForbidden, "totp_enrollment_required", "set up two-factor authentication (TOTP) before continuing", nil)
+		}
+		p = sp
+	}
+	if !p.Can(perm) {
+		return nil, problem(http.StatusForbidden, apperr.CodeForbidden, "missing permission "+string(perm), nil)
+	}
+	return p, nil
+}
+
+// WriteProblem writes a problem document from a plain handler.
+func WriteProblem(w http.ResponseWriter, p *Problem) {
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(p.Status)
+	_ = json.NewEncoder(w).Encode(p)
+}
+
+// FailHTTP converts an error for plain handlers (unexpected errors are logged, not leaked).
+func (d *Deps) FailHTTP(w http.ResponseWriter, r *http.Request, opName string, err error) {
+	var p *Problem
+	if errors.As(d.fail(r.Context(), opName, err), &p) {
+		WriteProblem(w, p)
+		return
+	}
+	WriteProblem(w, problem(http.StatusInternalServerError, "internal", "internal error", nil))
+}
+
+// ClientIPString returns the proxy-aware client IP of a plain handler request.
+func (d *Deps) ClientIPString(r *http.Request) string { return httpx.ClientIP(r.Context()).String() }
+
+// RequestID returns the request ID of a plain handler request.
+func (d *Deps) RequestID(r *http.Request) string { return httpx.GetRequestID(r.Context()) }
+
+// Fail converts a domain error into a problem (for operations registered outside this package).
+func (d *Deps) Fail(ctx context.Context, opName string, err error) error {
+	return d.fail(ctx, opName, err)
 }
