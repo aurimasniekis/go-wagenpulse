@@ -44,13 +44,24 @@ func newLogger(w io.Writer, cfg *config.Config) *slog.Logger {
 }
 
 func openApp(ctx context.Context, cfgPath string, stderr io.Writer) (*app.App, error) {
+	return openAppMode(ctx, cfgPath, stderr, false)
+}
+
+// openAppOnline opens the data directory for a short administrative command that also works while the server runs
+// (ADR-0027): setup tokens, password resets, audit verification and key status. Commands that change in-memory server
+// state (key rotation, migrations, restores) use openApp and need the server stopped.
+func openAppOnline(ctx context.Context, cfgPath string, stderr io.Writer) (*app.App, error) {
+	return openAppMode(ctx, cfgPath, stderr, true)
+}
+
+func openAppMode(ctx context.Context, cfgPath string, stderr io.Writer, attach bool) (*app.App, error) {
 	cfg, err := loadConfig(cfgPath)
 	if err != nil {
 		return nil, err
 	}
 	log := newLogger(stderr, cfg)
 	slog.SetDefault(log)
-	return app.Open(ctx, cfg, log, app.Options{})
+	return app.Open(ctx, cfg, log, app.Options{Attach: attach})
 }
 
 func runServe(ctx context.Context, args []string, _, stderr io.Writer) error {
@@ -201,7 +212,7 @@ func runKeysStatus(ctx context.Context, args []string, stdout, stderr io.Writer)
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
-	a, err := openApp(ctx, *cfgPath, stderr)
+	a, err := openAppOnline(ctx, *cfgPath, stderr)
 	if err != nil {
 		return err
 	}
@@ -280,7 +291,7 @@ func runSetupToken(ctx context.Context, args []string, stdout, stderr io.Writer)
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
-	a, err := openApp(ctx, *cfgPath, stderr)
+	a, err := openAppOnline(ctx, *cfgPath, stderr)
 	if err != nil {
 		return err
 	}
@@ -304,7 +315,7 @@ func runResetPassword(ctx context.Context, args []string, stdout, stderr io.Writ
 	if *user == "" {
 		return &exitError{code: 2, err: errors.New("--user is required")}
 	}
-	a, err := openApp(ctx, *cfgPath, stderr)
+	a, err := openAppOnline(ctx, *cfgPath, stderr)
 	if err != nil {
 		return err
 	}
@@ -332,7 +343,7 @@ func runAuditVerify(ctx context.Context, args []string, stdout, stderr io.Writer
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
-	a, err := openApp(ctx, *cfgPath, stderr)
+	a, err := openAppOnline(ctx, *cfgPath, stderr)
 	if err != nil {
 		return err
 	}

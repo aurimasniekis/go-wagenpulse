@@ -1,0 +1,86 @@
+/* Global styles. Colours come from --wp-* tokens (src/theme/tokens.ts) for both colour schemes. */
+
+:root {
+  font-feature-settings: 'cv11', 'ss01', 'tnum';
+}
+
+body {
+  background: var(--wp-bg);
+  color: var(--wp-text);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Visible keyboard focus everywhere, never on mouse clicks. */
+:focus-visible {
+  outline: 2px solid var(--wp-focus) !important;
+  outline-offset: 2px;
+}
+
+.wp-mono {
+  font-family: var(--mantine-font-family-monospace);
+  font-size: 0.8125rem;
+}
+
+.wp-num {
+  font-variant-numeric: tabular-nums;
+}
+
+.wp-surface {
+  background: var(--wp-surface);
+  border: 1px solid var(--wp-border);
+  border-radius: var(--mantine-radius-md);
+}
+
+.wp-table thead th {
+  background: var(--wp-surface2);
+  color: var(--wp-text-muted);
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.wp-table tbody tr:hover {
+  background: var(--wp-surface3);
+}
+
+.wp-kpi-value {
+  font-size: 1.75rem;
+  font-weight: 650;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.wp-skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 8px;
+  z-index: 1000;
+  padding: 8px 12px;
+  background: var(--wp-accent);
+  color: var(--wp-on-accent);
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+.wp-skip-link:focus {
+  left: 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Keyboard-reachable scroll containers (ScrollRegion) show the standard focus ring only when focused by keyboard. */
+.wp-scroll-region:focus-visible {
+  outline: 2px solid var(--wp-focus);
+  outline-offset: 2px;
+}

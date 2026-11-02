@@ -43,6 +43,11 @@ type Options struct {
 	PreMigrationSnapshots int
 	// SkipMigrate opens without applying migrations (used by offline tools that only read).
 	SkipMigrate bool
+	// AllowAttach lets a short-lived administrative command use the database while a server owns the data
+	// directory (ADR-0027). Without a running server the command takes the lock as usual. When attached, nothing is
+	// migrated and the schema must match this binary exactly; SQLite (WAL, busy timeout, BEGIN IMMEDIATE) serializes
+	// the writes of both processes. Only commands that touch no in-memory server state may attach.
+	AllowAttach bool
 	Logger      *slog.Logger
 	Clock       clock.Clock
 	// TxObserver, if set, receives the duration and outcome of every write transaction.
@@ -56,17 +61,18 @@ type Options struct {
 	migrations fs.FS
 }
 
-// Store is an open WagenPulse database owned exclusively by this process.
+// Store is an open WagenPulse database owned exclusively by this process (or attached to a running server).
 type Store struct {
-	dir    string
-	lock   *Lock
-	wdb    *sql.DB
-	rdb    *sql.DB
-	writer *Writer
-	reader *db.Queries
-	log    *slog.Logger
-	clock  clock.Clock
-	health *Health
+	dir      string
+	lock     *Lock
+	attached bool
+	wdb      *sql.DB
+	rdb      *sql.DB
+	writer   *Writer
+	reader   *db.Queries
+	log      *slog.Logger
+	clock    clock.Clock
+	health   *Health
 
 	closeOnce sync.Once
 	closeErr  error
@@ -109,10 +115,15 @@ func Open(ctx context.Context, opts Options) (*Store, error) {
 		}
 	}
 	lock, err := AcquireLock(filepath.Join(dir, LockFile))
+	attached := false
+	if errors.Is(err, ErrLocked) && opts.AllowAttach {
+		lock, err, attached = nil, nil, true
+		opts.SkipMigrate = true
+	}
 	if err != nil {
 		return nil, err
 	}
-	s := &Store{dir: dir, lock: lock, log: opts.Logger, clock: opts.Clock, health: newHealth(opts.Clock)}
+	s := &Store{dir: dir, lock: lock, attached: attached, log: opts.Logger, clock: opts.Clock, health: newHealth(opts.Clock)}
 	if err := s.open(ctx, opts); err != nil {
 		_ = s.Close()
 		return nil, err
@@ -143,12 +154,19 @@ func (s *Store) open(ctx context.Context, opts Options) error {
 	if err := QuickCheck(ctx, s.wdb); err != nil {
 		return err
 	}
-	if !opts.SkipMigrate {
+	switch {
+	case s.attached:
+		if err := checkSchemaCurrent(ctx, s.wdb, opts.migrations); err != nil {
+			return err
+		}
+	case !opts.SkipMigrate:
 		if err := migrate(ctx, s.wdb, opts.migrations, s.dir, opts.PreMigrationSnapshots, s.clock, s.log); err != nil {
 			return err
 		}
-	} else if err := checkSchemaNotNewer(ctx, s.wdb, opts.migrations); err != nil {
-		return err
+	default:
+		if err := checkSchemaNotNewer(ctx, s.wdb, opts.migrations); err != nil {
+			return err
+		}
 	}
 	if s.rdb, err = sql.Open("sqlite", readerDSN(path, opts.BusyTimeout)); err != nil {
 		return fmt.Errorf("open readers: %w", err)
@@ -204,6 +222,9 @@ func (s *Store) R() *db.Queries { return s.reader }
 
 // ReadDB returns the read-only pool for dynamic queries (filters, pagination).
 func (s *Store) ReadDB() *sql.DB { return s.rdb }
+
+// Attached reports whether this store is attached to a data directory owned by a running server (AllowAttach).
+func (s *Store) Attached() bool { return s.attached }
 
 // Dir returns the absolute data directory.
 func (s *Store) Dir() string { return s.dir }

@@ -67,6 +67,21 @@ func checkSchemaNotNewer(ctx context.Context, d *sql.DB, fsys fs.FS) error {
 	return nil
 }
 
+// checkSchemaCurrent requires the database schema to match this binary exactly (attached commands never migrate).
+func checkSchemaCurrent(ctx context.Context, d *sql.DB, fsys fs.FS) error {
+	cur, latest, err := SchemaVersions(ctx, d, fsys)
+	if err != nil {
+		return err
+	}
+	switch {
+	case cur > latest:
+		return fmt.Errorf("%w: database at version %d, this binary supports up to %d; use the binary of the running server", ErrSchemaTooNew, cur, latest)
+	case cur < latest:
+		return fmt.Errorf("database at schema version %d but this binary expects %d; use the binary of the running server, or stop it and run `wagenpulse migrate`", cur, latest)
+	}
+	return nil
+}
+
 // migrate applies pending migrations under the process lock. Before applying any, a VACUUM INTO snapshot
 // is written to <data>/backups so that a failed upgrade can be rolled back by restoring it.
 func migrate(ctx context.Context, d *sql.DB, fsys fs.FS, dir string, keep int, c clock.Clock, log *slog.Logger) error {

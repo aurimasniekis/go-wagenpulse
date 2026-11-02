@@ -253,3 +253,20 @@ refuses to run while the data directory is locked and requires an empty target. 
 - `stale` rules are evaluated by a durable scheduled sweep; each (rule, vehicle) fires once per stale episode and
   re-arms when fresh data arrives.
 - Debounce requires the condition to hold for N consecutive observations; cooldown suppresses repeats for a duration.
+
+## ADR-0027 — Administrative commands attach to a running server
+
+The data-directory `flock` keeps two servers (and their schedulers) from running on one database. The first e2e run
+showed that it also refused `wagenpulse admin setup-token` while the server ran. That forced an operator to stop the
+service to bootstrap it or to recover a locked-out root user.
+
+- `serve`, `migrate`, `keys rotate|retire` and `restore` keep taking the exclusive lock. Key rotation changes the
+  keyring the server holds in memory, and migrations change the schema under it.
+- `admin setup-token`, `admin reset-password`, `audit verify` and `keys status` open the store with `AllowAttach`:
+  - With no server running, they take the lock as before.
+  - With a server running, they attach without the lock and never migrate. The schema version must equal the binary's
+    exactly, and the command never creates keyring keys.
+- These commands keep no in-memory state that the server relies on. Their writes are single short transactions
+  (`BEGIN IMMEDIATE`, busy timeout). The audit chain head is read inside the transaction, so appends from both
+  processes stay ordered and the chain stays valid.
+- Running a long-lived second writer is still unsupported.

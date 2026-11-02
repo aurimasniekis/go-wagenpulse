@@ -110,6 +110,59 @@ func TestSecondOwnerRefused(t *testing.T) {
 	_ = s2.Close()
 }
 
+// ADR-0027: an administrative command attaches to a running server's database instead of being refused; without a
+// server it owns the directory as usual. Writes from both processes interleave safely.
+func TestAttachWhileOwned(t *testing.T) {
+	ctx := context.Background()
+	owner := openTest(t, Options{})
+	if owner.Attached() {
+		t.Fatal("owner must not be attached")
+	}
+	att, err := Open(ctx, Options{DataDir: owner.Dir(), AllowAttach: true})
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	if !att.Attached() {
+		t.Fatal("expected an attached store")
+	}
+	var wg sync.WaitGroup
+	for i := range 50 {
+		wg.Go(func() {
+			if err := putSetting(ctx, owner, fmt.Sprintf("owner-%d", i), "v"); err != nil {
+				t.Error(err)
+			}
+		})
+		wg.Go(func() {
+			if err := putSetting(ctx, att, fmt.Sprintf("attached-%d", i), "v"); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	wg.Wait()
+	rows, err := owner.R().ListSettings(ctx)
+	if err != nil || len(rows) != 100 {
+		t.Fatalf("rows=%d err=%v", len(rows), err)
+	}
+	if err := att.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := owner.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Without a running owner, an attach-capable command owns the directory (and keeps others out).
+	solo, err := Open(ctx, Options{DataDir: owner.Dir(), AllowAttach: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = solo.Close() }()
+	if solo.Attached() {
+		t.Fatal("expected ownership when no server runs")
+	}
+	if _, err := Open(ctx, Options{DataDir: owner.Dir()}); !errors.Is(err, ErrLocked) {
+		t.Fatalf("expected ErrLocked while the command owns the directory, got %v", err)
+	}
+}
+
 // HP-DB-003: concurrent writers never surface SQLITE_BUSY.
 func TestConcurrentWriters(t *testing.T) {
 	s := openTest(t, Options{})

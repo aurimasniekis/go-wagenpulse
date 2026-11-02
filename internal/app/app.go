@@ -58,6 +58,8 @@ type Options struct {
 	Environ []string
 	// HashParams overrides Argon2id parameters (tests only).
 	HashParams *auth.Params
+	// Attach lets an administrative command use the data directory while a server runs (store.Options.AllowAttach).
+	Attach bool
 }
 
 // Open opens the data directory (taking its lock), loads the keyring and builds every service.
@@ -72,7 +74,8 @@ func Open(ctx context.Context, cfg *config.Config, log *slog.Logger, opts Option
 	info := buildinfo.Get()
 	a.Metrics.SetBuildInfo(info.Version, info.GoVersion)
 	s, err := store.Open(ctx, store.Options{DataDir: cfg.DataDir, AllowNetworkFS: cfg.Storage.AllowNetworkFS,
-		PreMigrationSnapshots: cfg.Storage.PreMigrationSnapshots, Logger: log, Clock: opts.Clock, Metrics: a.Metrics})
+		PreMigrationSnapshots: cfg.Storage.PreMigrationSnapshots, Logger: log, Clock: opts.Clock, Metrics: a.Metrics,
+		AllowAttach: opts.Attach})
 	if err != nil {
 		return nil, err
 	}

@@ -98,6 +98,10 @@ func Load(ctx context.Context, s *store.Store, w KeyWrapper) (*Keyring, error) {
 			if len(keys[p]) > 0 {
 				return fmt.Errorf("keyring: purpose %s has keys but none active", p)
 			}
+			if s.Attached() {
+				// The running server owns key creation; an attached command never adds keys behind its back.
+				return fmt.Errorf("keyring: purpose %s has no key yet; let the server finish starting, then retry", p)
+			}
 			k, err := newDataKey(p, 1)
 			if err != nil {
 				return err
