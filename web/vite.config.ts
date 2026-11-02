@@ -3,8 +3,8 @@ import react from '@vitejs/plugin-react'
 import { tanstackRouter } from '@tanstack/router-plugin/vite'
 import { fileURLToPath } from 'node:url'
 
-// A running `wagenpulse serve` (make dev) answers the API on 127.0.0.1:8080.
-const api = process.env.WAGENPULSE_API ?? 'http://127.0.0.1:8080'
+// A running `wagenpulse serve` (make dev) answers the API on 127.0.0.1:58080 (DEV_PORT in the Makefile).
+const api = process.env.WAGENPULSE_API ?? 'http://127.0.0.1:58080'
 
 export default defineConfig({
   plugins: [tanstackRouter({ target: 'react', autoCodeSplitting: true }), react()],

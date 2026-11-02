@@ -127,7 +127,7 @@ Known limitations:
 ## How to run
 
 ```sh
-make build && make dev                     # http://localhost:8080 (development mode)
+make build && make dev                     # http://localhost:58080 (development mode)
 make dev-setup-token                       # in another terminal, then open /setup
 ```
 

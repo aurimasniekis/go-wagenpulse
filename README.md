@@ -50,11 +50,11 @@ single sign-on and scoped API tokens, and a Terraform provider manages its confi
 
 ```sh
 make build                                  # web UI + bin/wagenpulse (needs Go 1.27.3, Node 24, pnpm 10)
-make dev                                    # development mode: http://localhost:8080, data in .wagenpulse/
+make dev                                    # development mode: http://localhost:58080, data in .wagenpulse/
 make dev-setup-token                        # in another terminal (works while the server runs)
 ```
 
-1. Open <http://localhost:8080/setup>, paste the token and create the root user.
+1. Open <http://localhost:58080/setup>, paste the token and create the root user.
 2. Add a vehicle, then upload a delivery on **Imports**.
 
 Development mode generates a KEK inside the data directory and allows `http://localhost`. Production mode refuses

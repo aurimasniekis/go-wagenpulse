@@ -32,10 +32,14 @@ image: ## Build the container image
 	docker build --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) --build-arg BUILD_DATE=$(DATE) -t $(IMAGE):$(VERSION) .
 
 # Environment of the development instance; every host-side command against it needs the same settings.
-DEV_ENV := WAGENPULSE_MODE=development WAGENPULSE_DATA_DIR=$(CURDIR)/.wagenpulse/data WAGENPULSE_PUBLIC_URL=http://localhost:8080 \
-	WAGENPULSE_SECRETS_FILE_DIRS=$(CURDIR)/.wagenpulse/secrets
+# Ports are deliberately unusual so the dev instance does not collide with other local services.
+DEV_PORT      ?= 58080
+DEV_MGMT_PORT ?= 59464
+DEV_ENV := WAGENPULSE_MODE=development WAGENPULSE_DATA_DIR=$(CURDIR)/.wagenpulse/data \
+	WAGENPULSE_PUBLIC_URL=http://localhost:$(DEV_PORT) WAGENPULSE_HTTP_LISTEN=127.0.0.1:$(DEV_PORT) \
+	WAGENPULSE_MANAGEMENT_LISTEN=127.0.0.1:$(DEV_MGMT_PORT) WAGENPULSE_SECRETS_FILE_DIRS=$(CURDIR)/.wagenpulse/secrets
 
-dev: build-go ## Run a development instance (data in .wagenpulse/, UI via `cd web && pnpm dev`)
+dev: build-go ## Run a development instance on http://localhost:58080 (DEV_PORT; data in .wagenpulse/)
 	@mkdir -p .wagenpulse
 	$(DEV_ENV) $(BIN)/wagenpulse serve
 
