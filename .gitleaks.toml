@@ -1,0 +1,17 @@
+title = "wagenpulse gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Placeholder token shapes in docs; gitignored local artefacts"
+paths = [
+  '''(^|/)node_modules/''',
+  '''^bin/''',
+  '''(^|/)\.claude/''',
+  '''^testdata/local/''',
+]
+regexes = [
+  '''wgp_at_EXAMPLE[A-Za-z0-9_]*''',
+  '''wgp_setup_EXAMPLE[A-Za-z0-9_]*''',
+]

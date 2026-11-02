@@ -1,0 +1,16 @@
+WagenPulse
+Copyright 2026 Aurimas Niekis
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Portions of this product are adapted from Porch (github.com/aurimasniekis/go-porch), HallPass
+(github.com/aurimasniekis/go-hallpass), Pulse (github.com/aurimasniekis/go-pulse), pulse-github
+(github.com/aurimasniekis/go-pulse-github) and go-cupra (github.com/aurimasniekis/go-cupra), all Copyright 2026
+Aurimas Niekis. Porch, HallPass and Pulse are licensed under the Apache License, Version 2.0; pulse-github is licensed
+under the MIT License; go-cupra is unpublished code by the same author contributed under this product's license.
+Adapted files carry a provenance comment naming their origin.
+
+The bundled signal dictionaries (internal/dictionary/bundled/*.json) are derived from the Volkswagen Group documents
+"EU Data Act - List of Continuous Data" and "EU Data Act - List of Historical Data" (version 1.0.0, 2025-09-11),
+published on the Volkswagen Group EU Data Act portal. They are reproduced to describe the data a vehicle owner receives
+from that portal. Volkswagen AG and its brands are not affiliated with this project and do not endorse it.

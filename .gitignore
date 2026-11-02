@@ -1,0 +1,38 @@
+# Build output
+/bin/
+/dist/
+*.test
+*.out
+coverage.*
+
+# Local runtime data and secrets — never commit
+/data/
+/.wagenpulse/
+*.kek
+kek
+*.db
+*.db-wal
+*.db-shm
+/deploy/.dev/
+*.creds
+
+# Real upstream samples (VINs, telemetry) — never commit; tests use synthetic fixtures
+/testdata/local/
+
+# Frontend
+node_modules/
+/web/dist/
+/internal/webui/dist/*
+!/internal/webui/dist/README.txt
+/web/test-results/
+/web/playwright-report/
+/web/blob-report/
+/web/.tanstack/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Root binary
+/wagenpulse
