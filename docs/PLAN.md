@@ -20,7 +20,7 @@ Key references: `docs/DECISIONS.md`, `docs/CAPABILITIES.md`, `docs/STORAGE.md`, 
 | M0 | Planning docs, repo hygiene, tooling, CI skeleton | done | commit 165c671 |
 | M1 | Core platform: config, logging/redaction, store + migrations, ids, apperr, keyring/secretref, health/metrics, `serve`, graceful shutdown | done | `go test ./...`, golangci-lint 0 issues |
 | M2 | Auth: bootstrap, local login, sessions, CSRF, throttling, TOTP, RBAC, API tokens, audit, OIDC; web shell + admin screens | done | internal/auth, internal/auth/oidc tests; e2e sign-in, token and 2FA flows |
-| M3 | Terraform provider (separate repo `../terraform-provider-wagenpulse`) | in progress | see the provider repo's README and test results |
+| M3 | Terraform provider (separate repo `../terraform-provider-wagenpulse`) | done (not published) | provider `make testacc` 54/54 against app `8bdb782`; `make scenario` apply → empty plan → destroy; docs-check, lint |
 | M4 | Dictionaries: dictgen, bundled JSON, versioned tables, unit registry, signals API | done | internal/dictionary tests; 1141/5140 entries |
 | M5 | Vehicles, sources, jobs/scheduler, safe importer, parser, normalization, observations/state; imports UI | done | internal/ingest tests incl. real samples (local only); e2e upload + duplicate detection |
 | M6 | Unofficial portal collector (cookie + scripted login), auth states, rate limiting, checkpoints; collection health UI | done, **not live-verified** | internal/sources tests against fakeportal; sources pages in e2e |
@@ -49,3 +49,5 @@ See the task brief §16; tracked item by item in the final section of this file 
   commands (ADR-0027); online backup/verify/restore; benchmarks (fixed a quadratic rollup query: 1 s → 27 ms);
   crash recovery (orphaned leases released at startup) with process-level and delivery crash tests; `keys rewrap`;
   container image, Compose, systemd unit, release pipeline and operator docs.
+- 2026-11-02 — Terraform provider (10 resources, 4 data sources) built and acceptance-tested. Its tests found three
+  app API gaps, now fixed: Retry-After on 429, token `vehicle_ids` null, and the settings first-write revision.
