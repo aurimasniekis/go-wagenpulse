@@ -10,8 +10,10 @@ paths = [
   '''^bin/''',
   '''(^|/)\.claude/''',
   '''^testdata/local/''',
+  '''^internal/dictionary/bundled/.*\.json$''', # dictionary keys are public UUIDs from the official PDFs
 ]
 regexes = [
+  '''[0-9a-f]{8}-[0-9a-f]{4}-3[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}''', # UUIDv3 signal keys (not secrets)
   '''wgp_at_EXAMPLE[A-Za-z0-9_]*''',
   '''wgp_setup_EXAMPLE[A-Za-z0-9_]*''',
 ]
