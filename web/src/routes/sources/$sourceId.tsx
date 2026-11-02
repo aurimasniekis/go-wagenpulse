@@ -31,7 +31,10 @@ const stateGuidance: Record<string, { color: string; text: string }> = {
     color: 'blue',
     text: 'Not checked yet. The first collection run verifies the credentials and the active data request.',
   },
-  authorized: { color: 'green', text: 'Signed in and an active data request was found. Collection runs on schedule.' },
+  authorized: {
+    color: 'green',
+    text: 'Signed in to the portal. Collection runs on schedule for the selected vehicles.',
+  },
   reauthorization_required: {
     color: 'red',
     text: 'The portal rejected the session or login (expired cookie, changed password, CAPTCHA, new terms or consent). Sign in to the portal in a browser, resolve any prompt, then update the secret.',
@@ -105,7 +108,15 @@ function SourceDetail() {
   const s = q.data
   const st = s.status
   const state = s.enabled ? (st?.state ?? 'configured') : 'disabled'
-  const guide = stateGuidance[state]
+  // Signed in but nothing to collect: say so plainly instead of the green "all good" guidance.
+  const unbound = s.vehicle_ids.length === 0
+  const guide =
+    unbound && state === 'authorized'
+      ? {
+          color: 'yellow',
+          text: 'Signed in, but no vehicles are selected, so nothing is collected. Edit the source and select your vehicles under Vehicles.',
+        }
+      : stateGuidance[state]
   const vName = (id: string) => vehicles.data?.items.find((v) => v.id === id)?.display_name ?? id
   return (
     <>

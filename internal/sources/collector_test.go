@@ -240,3 +240,19 @@ func TestValidation(t *testing.T) {
 		}
 	}
 }
+
+// A signed-in source without bound vehicles names the WagenPulse vehicles the portal account holds (never the VIN).
+func TestUnboundSourceNamesMatchingVehicles(t *testing.T) {
+	e := newEnv(t)
+	e.portal.Set(func(p *fakeportal.Portal) { p.Requests[vin] = map[string]string{"partial": "req-1"} })
+	secret := "PORTALSESSION=valid-session"
+	src, err := e.svc.Create(context.Background(), audit.System, Input{Name: "Portal", Enabled: true, Brand: "cupra", Country: "de",
+		Language: "en", AuthMode: AuthSessionCookie, Secret: &secret, CollectContinuous: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := e.runOnce(t, src.ID).Status
+	if got.State != "authorized" || !strings.Contains(got.Reason, "matching: Car") || strings.Contains(got.Reason, vin) {
+		t.Fatalf("unbound status: %+v", got)
+	}
+}

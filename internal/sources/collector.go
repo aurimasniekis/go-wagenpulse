@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -250,11 +251,13 @@ func (c *Collector) collect(ctx context.Context, src Source) (runOutcome, *time.
 		return runOutcome{state: "error", class: "internal"}, nil
 	}
 	if len(vehs) == 0 {
-		// Verify the session even without vehicles so the operator sees whether it works.
-		if _, err := cl.Vehicles(ctx); err != nil {
+		// Verify the session even without vehicles so the operator sees whether it works, and say which vehicles to
+		// bind: the account's portal vehicles that match a WagenPulse vehicle by VIN (named, never showing the VIN).
+		portal, err := cl.Vehicles(ctx)
+		if err != nil {
 			return outcomeFor(err), nil
 		}
-		return runOutcome{state: "authorized", reason: "no vehicles are bound to this source", success: true}, nil
+		return runOutcome{state: "authorized", reason: c.unboundReason(ctx, portal), success: true}, nil
 	}
 	types := []string{}
 	if src.CollectContinuous {
@@ -495,4 +498,27 @@ func (c *Collector) UpdateLagMetrics(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// unboundReason explains a source without bound vehicles, naming the WagenPulse vehicles that the portal account
+// holds so the operator knows what to select.
+func (c *Collector) unboundReason(ctx context.Context, portal []vwdataact.VehicleInfo) string {
+	if len(portal) == 0 {
+		return "signed in, but the portal account lists no vehicles; no vehicles are bound to this source"
+	}
+	var names []string
+	for _, pv := range portal {
+		var name string
+		err := c.svc.s.ReadDB().QueryRowContext(ctx, `SELECT display_name FROM vehicles WHERE vin = ? AND archived_at IS NULL`, pv.VIN).Scan(&name)
+		if err == nil {
+			names = append(names, name)
+		}
+	}
+	switch {
+	case len(names) > 0:
+		return fmt.Sprintf("no vehicles are bound to this source; the portal account holds %d vehicle(s), matching: %s. Edit the source and select them under Vehicles",
+			len(portal), strings.Join(names, ", "))
+	default:
+		return fmt.Sprintf("no vehicles are bound to this source; the portal account holds %d vehicle(s), none added to WagenPulse yet (add it under Vehicles with its VIN, then select it here)", len(portal))
+	}
 }
