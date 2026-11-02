@@ -71,14 +71,12 @@ kek:
   file: /var/lib/wagenpulse/kek
 storage:
   allow_network_fs: true
-demo:
-  enabled: true
 `)
 	_, err := Load(p, nil)
 	if err == nil {
 		t.Fatal("expected errors")
 	}
-	for _, want := range []string{"public_url must use https", "kek.file must be stored outside data_dir", "allow_network_fs", "demo.enabled"} {
+	for _, want := range []string{"public_url must use https", "kek.file must be stored outside data_dir", "allow_network_fs"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("missing %q in %v", want, err)
 		}

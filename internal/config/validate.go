@@ -114,9 +114,6 @@ func (c *Config) Validate() error {
 		v.add("workers.delivery_per_adapter must be within 1..16")
 	}
 	v.durationRange("workers.shutdown_grace", c.Workers.ShutdownGrace, time.Second, 10*time.Minute)
-	if prod && c.Demo.Enabled {
-		v.add("demo.enabled loads synthetic data and is development-only")
-	}
 	return v.err()
 }
 

@@ -88,3 +88,14 @@ test.describe('password sign-in', () => {
     await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible()
   })
 })
+
+test('two-factor enrolment shows a scannable QR code and setup key', async ({ page }) => {
+  await page.goto('/account')
+  await page.getByRole('button', { name: 'Enable' }).click()
+  await expect(page.getByRole('img', { name: 'QR code for your authenticator app' })).toBeVisible()
+  await expect(page.getByTestId('totp-secret')).toHaveText(/^[A-Z2-7 ]{16,}$/)
+  await axe(page)
+  // Cancel without confirming: two-factor stays off, so the password sign-in test is unaffected.
+  await page.getByRole('button', { name: 'Cancel' }).click()
+  await expect(page.getByRole('button', { name: 'Enable' })).toBeVisible()
+})

@@ -73,7 +73,6 @@ type Config struct {
 	Ingest     IngestConfig     `yaml:"ingest"`
 	Workers    WorkersConfig    `yaml:"workers"`
 	Secrets    SecretsConfig    `yaml:"secrets"`
-	Demo       DemoConfig       `yaml:"demo"`
 }
 
 // SecretsConfig limits external secret references (ADR-0007). Environment references must be named
@@ -184,11 +183,6 @@ type WorkersConfig struct {
 	DeliveryPerAdapter int `yaml:"delivery_per_adapter"`
 	// ShutdownGrace bounds draining on SIGTERM.
 	ShutdownGrace Duration `yaml:"shutdown_grace"`
-}
-
-// DemoConfig allows loading clearly labelled synthetic demo data. It is refused in production mode.
-type DemoConfig struct {
-	Enabled bool `yaml:"enabled"`
 }
 
 // Load reads path (optional) and applies environment overrides from environ, then validates.

@@ -20,6 +20,7 @@ import { createFileRoute } from '@tanstack/react-router'
 import { useState } from 'react'
 import { api, check, unwrap } from '@/api/client'
 import { ConfirmDialog } from '@/components/Confirm'
+import { QrCode } from '@/components/QrCode'
 import { DefinitionList, EmptyBlock, PageHeader, QueryState, SecretOnce, Section, Time } from '@/components/ui'
 import { errorMessage, notifyError, notifySuccess } from '@/lib/notify'
 import { meKey, useMe } from '@/lib/session'
@@ -152,8 +153,11 @@ function TotpSection({ enabled }: { enabled: boolean }) {
             Add WagenPulse to your authenticator app with this setup key (or open the link on a device with an
             authenticator), then enter the 6-digit code.
           </Text>
+          <Group justify="center">
+            <QrCode value={enrollment.uri} label="QR code for your authenticator app" />
+          </Group>
           <Text size="sm" fw={600}>
-            Setup key
+            Or enter this setup key
           </Text>
           <Code block style={{ letterSpacing: '0.1em' }} data-testid="totp-secret">
             {enrollment.secret.replace(/(.{4})/g, '$1 ').trim()}
