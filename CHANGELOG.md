@@ -65,6 +65,13 @@ All notable changes to this project are documented here. The format follows
 - API contract: 429 responses carry `Retry-After`; unrestricted API tokens return `vehicle_ids: []` instead of null;
   the first stored settings write gets revision 2 (not the defaults' revision 1), so `If-Match` detects a concurrent
   first write.
+- Loading the bundled dictionaries writes in smaller batches, so no single write transaction holds the database for
+  long (ADR-0002).
+
+### Security
+
+- Built with Go 1.27.4, which fixes GO-2026-6859 (an HTTP/1 server crash caused by a `MaxBytesReader` header race in
+  `net/http`). The container's build image is updated to match.
 
 [Unreleased]: https://github.com/aurimasniekis/go-wagenpulse/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/aurimasniekis/go-wagenpulse/releases/tag/v0.1.0
