@@ -164,7 +164,9 @@ type Service struct {
 // New returns a dictionary service.
 func New(s *store.Store, a *audit.Writer) *Service { return &Service{s: s, audit: a} }
 
-const batchSize = 100
+// batchSize bounds the entries written per transaction (ADR-0002). Each entry costs two upserts; at ~5 ms per entry under
+// -race on a loaded runner, 100 entries took 500-840 ms, so 20 keeps every transaction near 100 ms even there.
+const batchSize = 20
 
 // LoadBundled loads every bundled dictionary that is not loaded yet (idempotent; called at startup).
 func (svc *Service) LoadBundled(ctx context.Context) error {

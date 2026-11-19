@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aurimasniekis/go-wagenpulse/internal/audit"
 	"github.com/aurimasniekis/go-wagenpulse/internal/keyring/keyringtest"
@@ -74,9 +75,10 @@ func TestKindsAndUnits(t *testing.T) {
 // time must not collide; each document is stored once.
 func TestConcurrentLoadAcrossProcesses(t *testing.T) {
 	ctx := context.Background()
-	owner := storetest.Open(t)
+	// Two loaders contend for the write lock; SQLite's busy handler is unfair, so allow far more than the 5 s default under -race.
+	owner := storetest.Open(t, storetest.WithBusyTimeout(time.Minute))
 	kr := keyringtest.Load(t, owner)
-	att, err := store.Open(ctx, store.Options{DataDir: owner.Dir(), AllowAttach: true})
+	att, err := store.Open(ctx, store.Options{DataDir: owner.Dir(), AllowAttach: true, BusyTimeout: time.Minute})
 	if err != nil {
 		t.Fatal(err)
 	}
