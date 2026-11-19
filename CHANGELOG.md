@@ -45,8 +45,9 @@ All notable changes to this project are documented here. The format follows
 - **Operations**
   - Retention.
   - Online `backup create`/`verify`, and `restore` (server stopped).
-  - `keys rotate|retire|rewrap` (`rewrap` with the server stopped).
-  - Administrative commands.
+  - `keys rotate|retire|rewrap` (server stopped).
+  - Administrative commands that work while the server runs: `admin setup-token`, `admin reset-password`,
+    `audit verify`, `keys status` and `backup create`.
 - **Web UI:** React and Mantine, with Cobalt2-style light and dark themes, AA-checked colours and axe-tested pages.
   Vehicles are shown as readable dashboards rather than raw signal dumps.
 - **Packaging:** distroless container image, Compose file, systemd unit, release workflow and archives.
@@ -59,7 +60,11 @@ All notable changes to this project are documented here. The format follows
 - The collector no longer mistakes Auth0's captcha scripts for a bot challenge. A challenge is reported only when the
   form demands a captcha, a challenge page is served instead of the form, or a submission is rejected.
 - Sources that are signed in but have no vehicles selected now say so explicitly.
-- Administrative commands can attach while the server is still starting.
+- An administrative command started while the server is still starting no longer fails with a dictionary
+  UNIQUE-constraint error.
+- API contract: 429 responses carry `Retry-After`; unrestricted API tokens return `vehicle_ids: []` instead of null;
+  the first stored settings write gets revision 2 (not the defaults' revision 1), so `If-Match` detects a concurrent
+  first write.
 
 [Unreleased]: https://github.com/aurimasniekis/go-wagenpulse/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/aurimasniekis/go-wagenpulse/releases/tag/v0.1.0
