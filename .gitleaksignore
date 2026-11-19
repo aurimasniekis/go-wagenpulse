@@ -1,0 +1,2 @@
+# False positive: a localStorage item name (a constant, not a credential) in a historical commit; the line no longer exists.
+6a8ed144a2cef3c7860b3486cf98409a49f75717:web/src/lib/prefs.ts:generic-api-key:13
