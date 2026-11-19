@@ -4,7 +4,7 @@ This file records **what is verified** about acquiring vehicle data from the Vol
 evidence for each claim, and what remains unverified. It is the source of truth for every acquisition feature in
 WagenPulse. Update it only with evidence. Never record a VIN, an account identifier or a telemetry value here.
 
-Last reviewed: 2026-11-02.
+Last reviewed: 2026-11-19.
 
 ## Summary
 

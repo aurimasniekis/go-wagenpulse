@@ -23,7 +23,7 @@ Key references: `docs/DECISIONS.md`, `docs/CAPABILITIES.md`, `docs/STORAGE.md`, 
 | M3 | Terraform provider (separate repo `../terraform-provider-wagenpulse`) | done (not published) | provider `make testacc` 54/54 against app `8bdb782`; `make scenario` apply → empty plan → destroy; docs-check, lint |
 | M4 | Dictionaries: dictgen, bundled JSON, versioned tables, unit registry, signals API | done | internal/dictionary tests; 1141/5140 entries |
 | M5 | Vehicles, sources, jobs/scheduler, safe importer, parser, normalization, observations/state; imports UI | done | internal/ingest tests incl. real samples (local only); e2e upload + duplicate detection |
-| M6 | Unofficial portal collector (cookie + scripted login), auth states, rate limiting, checkpoints; collection health UI | done, **not live-verified** | internal/sources tests against fakeportal; sources pages in e2e |
+| M6 | Unofficial portal collector (cookie + scripted login), auth states, rate limiting, checkpoints; collection health UI | done; password mode verified live once by the owner (2026-11-02), cookie mode and session lifetime **not live-verified** | internal/sources tests against fakeportal; sources pages in e2e |
 | M7 | Queries/aggregation/rollups; fleet, vehicle, explorer screens; CSV export | done | rollup-vs-raw test; benchmarks in docs/STORAGE.md; e2e vehicle history chart/table |
 | M8 | Rules, events, routes, dispatcher, Pulse adapter; rules/adapters/events UIs | done | internal/adapters integration tests (delivery, missing grant, outage, replay, crash mid-delivery); e2e rule preview |
 | M9 | Retention, purge, backup/restore, audit UI, system info | done | internal/backup tests; CLI smoke test (backup while running, tamper detection, restore, restart) |
