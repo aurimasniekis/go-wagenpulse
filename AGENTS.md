@@ -24,6 +24,15 @@ agent session in this repository.
 
 ## Git workflow
 
-- Work on `main`. One Conventional Commit per verified milestone or coherent sub-slice (`/cc`).
+- Do not work on `main`. Start each task on its own feature branch (for example `feat/…`, `fix/…`, `docs/…`) and keep
+  all of its commits there.
+- One Conventional Commit per verified milestone or coherent sub-slice (`/cc`). Conventional Commits apply to every
+  commit message, including those on feature branches.
 - Stage only relevant files by path; inspect the diff first.
-- **Never push**, create tags or open PRs without an explicit instruction.
+- Commit with the git identity and signing profile the operator configures for agents, never a personal one.
+- Push only your feature branch, and only to the remote the task names. Never push to `main` or any other protected
+  branch, never force-push, and never delete remote branches.
+- When the task is ready for review, open a pull request from your branch against `main`. Describe what changed, how
+  it was verified, and what is still open. Do not open a pull request for work that has not been verified.
+- A maintainer reviews, merges and tags releases. Never merge a pull request, create or push tags, or publish a
+  release yourself.
