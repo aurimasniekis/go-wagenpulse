@@ -40,6 +40,13 @@ type Portal struct {
 	Captcha bool
 	// Interstitial serves a bot-challenge page instead of the sign-in form (a CDN challenge in front of the IdP).
 	Interstitial bool
+	// Expired selects how the portal answers an API request with a session it no longer accepts:
+	//   ExpiredUnauthorized ("", the default): HTTP 401;
+	//   ExpiredRedirect: a redirect into the sign-in flow, which ends in an HTML sign-in page with status 200;
+	//   ExpiredEmpty: as if the account had nothing (no vehicles, 404 "No data request found" for metadata).
+	// The real portal's behaviour is not verified (docs/CAPABILITIES.md); these shapes keep the collector honest about
+	// all of them.
+	Expired string
 	// Hits counts requests by path prefix.
 	Hits map[string]int
 	// UserAgents seen.
@@ -111,7 +118,14 @@ func (p *Portal) serve(w http.ResponseWriter, r *http.Request) {
 		_, _ = fmt.Fprint(w, "ok")
 	case strings.HasPrefix(path, "/proxy_api/"):
 		if !p.authorized(r) {
-			w.WriteHeader(http.StatusUnauthorized)
+			switch p.Expired {
+			case ExpiredRedirect:
+				http.Redirect(w, r, "/oidc/v1/authorize?client_id=x&redirect_uri="+p.Server.URL+"/login", http.StatusFound)
+			case ExpiredEmpty:
+				p.expiredEmpty(w, r)
+			default:
+				w.WriteHeader(http.StatusUnauthorized)
+			}
 			return
 		}
 		if p.RateLimit > 0 && strings.HasPrefix(path, "/proxy_api/euda-apim/") {
@@ -140,6 +154,23 @@ func (p *Portal) loginPage(errMsg string) string {
 	return `<html><head><script src="/u/assets/captcha.js"></script><style>.ulp-captcha-container{display:none}</style></head><body>` +
 		`<form method="post" action="/u/login?state=abc"><input type="hidden" name="state" value="abc"><input name="username"><input name="password">` +
 		`<div class="ulp-captcha-container">` + widget + `</div>` + errMsg + `</form></body></html>`
+}
+
+// Expired-session behaviours (see Portal.Expired).
+const (
+	ExpiredUnauthorized = ""
+	ExpiredRedirect     = "redirect"
+	ExpiredEmpty        = "empty"
+)
+
+func (p *Portal) expiredEmpty(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.URL.Path == "/proxy_api/consent/me/vehicles" {
+		_, _ = fmt.Fprint(w, `{"vehicles":[]}`)
+		return
+	}
+	w.WriteHeader(http.StatusNotFound)
+	_, _ = fmt.Fprint(w, `{"message":"No data request found"}`)
 }
 
 func (p *Portal) api(w http.ResponseWriter, r *http.Request) {

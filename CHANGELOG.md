@@ -5,6 +5,18 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- The portal collector no longer mistakes an expired portal session for "no active data request". The portal does
+  not always answer an expired session with 401: it can redirect into the sign-in flow or answer as if the account
+  had nothing. The collector reported such a source as `no_active_request` (a success) and never signed in again, so
+  deliveries stopped although the data request was still active. A redirect into the sign-in flow or an HTML page from
+  the API now counts as an expired session. When every request reports "no active request", the collector also checks
+  whether the session still lists vehicles. In password mode it then signs in again, at most once per run. In cookie
+  mode the source moves to `reauthorization_required`.
+- A source that reports `no_active_request` for 4 consecutive runs no longer counts as a success. Its last-success
+  time stops advancing, the reason gives the number of runs, a warning is logged and retries back off.
+
 ## [0.1.1] - 2026-11-20
 
 ### Security

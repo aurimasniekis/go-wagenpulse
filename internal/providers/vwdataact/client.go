@@ -123,6 +123,9 @@ type Client struct {
 	login func(ctx context.Context) error
 	mu    sync.Mutex
 	last  time.Time
+	// logins counts login attempts by this client. A client lives for one collection run, and at most one login
+	// happens per run: a session that is rejected right after a fresh login is not retried again.
+	logins int
 }
 
 // New builds a client. login (optional) establishes or refreshes the session in the cookie jar.
@@ -199,13 +202,30 @@ func (c *Client) Cookies() string {
 	return strings.Join(parts, "; ")
 }
 
-// Login runs the configured login function.
+// Login runs the configured login function. It runs at most once per client; a second call reports ClassAuth.
 func (c *Client) Login(ctx context.Context) error {
 	if c.login == nil {
 		return &Error{Class: ClassAuth, Msg: "the portal session expired; paste a fresh session cookie from your browser"}
 	}
+	c.mu.Lock()
+	n := c.logins
+	c.logins++
+	c.mu.Unlock()
+	if n > 0 {
+		return &Error{Class: ClassAuth, Msg: "the portal rejected the session again right after signing in; reauthorize the source"}
+	}
 	return c.login(ctx)
 }
+
+// Logins returns how many logins this client attempted (0 = it is still using a stored session).
+func (c *Client) Logins() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.logins
+}
+
+// CanLogin reports whether the client can sign in by itself (password mode).
+func (c *Client) CanLogin() bool { return c.login != nil }
 
 // VehicleInfo is a vehicle visible on the portal.
 type VehicleInfo struct {
@@ -338,21 +358,52 @@ func (c *Client) Download(ctx context.Context, vin, identifier, requestType, nam
 	return body, err
 }
 
-// get issues a GET, re-logging-in once on 401/403 when a login function exists.
+// get issues a GET, signing in again once (per client) when the session is rejected or has expired.
+//
+// An expired portal session does not always answer 401/403: the request can be redirected into the sign-in flow,
+// which ends in an HTML page with status 200. Such an answer to a data endpoint is treated as an expired session,
+// never as data or as "no active request".
 func (c *Client) get(ctx context.Context, rawURL string, headers map[string]string, limit int64) ([]byte, int, error) {
-	body, status, err := c.do(ctx, rawURL, headers, limit)
+	resp, err := c.do(ctx, rawURL, headers, limit)
 	if err != nil {
 		return nil, 0, err
 	}
-	if (status == http.StatusUnauthorized || status == http.StatusForbidden) && c.login != nil {
-		if lerr := c.login(ctx); lerr != nil {
-			return nil, status, lerr
+	if c.sessionRejected(resp) && c.login != nil && c.Logins() == 0 {
+		if lerr := c.Login(ctx); lerr != nil {
+			return nil, resp.status, lerr
 		}
-		if body, status, err = c.do(ctx, rawURL, headers, limit); err != nil {
+		if resp, err = c.do(ctx, rawURL, headers, limit); err != nil {
 			return nil, 0, err
 		}
 	}
-	return body, status, classify(status, body)
+	if c.sessionRejected(resp) {
+		return nil, resp.status, &Error{Class: ClassAuth, Status: resp.status, Msg: "the portal rejected the session; reauthorize the source"}
+	}
+	return resp.body, resp.status, classify(resp.status, resp.body)
+}
+
+// response is what do returns: the body and where the request ended after redirects.
+type response struct {
+	body        []byte
+	status      int
+	finalURL    *url.URL
+	contentType string
+}
+
+// sessionRejected reports a 401/403, a redirect away from the portal API (into the sign-in flow), or an HTML page
+// where the API answers JSON or a file.
+func (c *Client) sessionRejected(r response) bool {
+	if r.status == http.StatusUnauthorized || r.status == http.StatusForbidden {
+		return true
+	}
+	if r.status >= 300 {
+		return false
+	}
+	if base, err := url.Parse(c.cfg.BaseURL); err == nil && r.finalURL != nil &&
+		(!strings.EqualFold(r.finalURL.Host, base.Host) || !strings.HasPrefix(r.finalURL.Path, "/proxy_api/")) {
+		return true
+	}
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(r.contentType)), "text/html")
 }
 
 func classify(status int, _ []byte) error {
@@ -370,13 +421,13 @@ func classify(status int, _ []byte) error {
 	}
 }
 
-func (c *Client) do(ctx context.Context, rawURL string, headers map[string]string, limit int64) ([]byte, int, error) {
+func (c *Client) do(ctx context.Context, rawURL string, headers map[string]string, limit int64) (response, error) {
 	if err := c.pace(ctx); err != nil {
-		return nil, 0, err
+		return response{}, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return nil, 0, err
+		return response{}, err
 	}
 	req.Header.Set("Accept", "application/json, application/zip, */*")
 	req.Header.Set("User-Agent", c.cfg.UserAgent)
@@ -386,23 +437,23 @@ func (c *Client) do(ctx context.Context, rawURL string, headers map[string]strin
 	resp, err := c.hc.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil, 0, ctx.Err()
+			return response{}, ctx.Err()
 		}
-		return nil, 0, &Error{Class: ClassUnavailable, Msg: "network error reaching the portal"}
+		return response{}, &Error{Class: ClassUnavailable, Msg: "network error reaching the portal"}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return nil, resp.StatusCode, &Error{Class: ClassRateLimited, Status: resp.StatusCode, RetryAfter: retryAfter(resp.Header.Get("Retry-After")),
+		return response{status: resp.StatusCode}, &Error{Class: ClassRateLimited, Status: resp.StatusCode, RetryAfter: retryAfter(resp.Header.Get("Retry-After")),
 			Msg: "the portal is rate limiting requests"}
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
-		return nil, 0, &Error{Class: ClassUnavailable, Msg: "reading the portal response failed"}
+		return response{}, &Error{Class: ClassUnavailable, Msg: "reading the portal response failed"}
 	}
 	if int64(len(body)) > limit {
-		return nil, resp.StatusCode, &Error{Class: ClassTooLarge, Msg: "the portal response exceeds the size limit"}
+		return response{status: resp.StatusCode}, &Error{Class: ClassTooLarge, Msg: "the portal response exceeds the size limit"}
 	}
-	return body, resp.StatusCode, nil
+	return response{body: body, status: resp.StatusCode, finalURL: resp.Request.URL, contentType: resp.Header.Get("Content-Type")}, nil
 }
 
 // pace enforces MinInterval between requests.
