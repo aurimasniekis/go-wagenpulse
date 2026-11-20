@@ -4,7 +4,7 @@ This file records **what is verified** about acquiring vehicle data from the Vol
 evidence for each claim, and what remains unverified. It is the source of truth for every acquisition feature in
 WagenPulse. Update it only with evidence. Never record a VIN, an account identifier or a telemetry value here.
 
-Last reviewed: 2026-11-02.
+Last reviewed: 2026-11-19.
 
 ## Summary
 
@@ -14,9 +14,9 @@ Last reviewed: 2026-11-02.
 | Owner downloads deliveries in a browser (ZIP) | **Verified** | 17 real ZIPs supplied by the project owner (E1) | File import (upload, CLI, API) |
 | Continuous ("partial") delivery file format | **Verified** for the flat layout, **documented by community** for the dotted (MEB) layout | E1, E4–E6 | Parser `vwdataact.continuous.v1` |
 | Historical ("all") one-time export format | **Unverified** | No sample available; dictionary implies a different, nested multi-system structure (E2) | Archives that do not match a verified structure are stored as `unrecognized` with a structural fingerprint and can be reprocessed when a parser exists; no values are invented |
-| Automated download via the portal's web backend (`/proxy_api/euda-apim/…`) | **Unofficial, community-observed**, not live-verified by this project | E3–E6, `../cupra/internal/cupra/eudataact` | Opt-in source kind `vw_data_act_portal`, labelled "unofficial portal interface", disabled until configured |
-| Login to the portal by script (VW Identity form replay) | **Unofficial, community-observed** | E4–E6 | Supported as `auth_mode = password`, opt-in |
-| Login with a browser-captured portal session cookie | **Unofficial, community-observed** | E5, `../cupra` | Supported as `auth_mode = session_cookie` |
+| Automated download via the portal's web backend (`/proxy_api/euda-apim/…`) | **Unofficial, community-observed**; scripted login and collection **verified live once by the owner** (2026-11-02, one account, one vehicle) | E3–E6, `../cupra/internal/cupra/eudataact`, evidence log 2026-11-02 | Opt-in source kind `vw_data_act_portal`, labelled "unofficial portal interface", disabled until configured |
+| Login to the portal by script (VW Identity form replay) | **Unofficial, community-observed**; **verified live once by the owner** (2026-11-02, password mode) | E4–E6, evidence log 2026-11-02 | Supported as `auth_mode = password`, opt-in |
+| Login with a browser-captured portal session cookie | **Unofficial, community-observed**; **not live-verified** | E5, `../cupra` | Supported as `auth_mode = session_cookie` |
 | Creating or renewing the portal data request (consent) | **Interactive only** | E4 (clients "cannot create or fix portal requests") | Never automated. The source shows `no_active_request` and links the user to the portal |
 | Real-time / push / streaming | **Not available** | E3, E4 (≈15-minute delivery cadence at best) | Polling no faster than the configured interval (min 15 min) |
 | GPS / location history | **Not present in continuous data** per community clients (E5); not observed in E1 | E1, E5 | Nothing is assumed |
@@ -102,7 +102,7 @@ Last reviewed: 2026-11-02.
 | 2026-11-02 | `internal/ingest` `TestRealSamples` over the 17 owner-supplied ZIPs (`WAGENPULSE_REAL_SAMPLES` glob; data stays outside the repository) with the bundled dictionaries | 17 files → 1 stored delivery + 16 byte-identical duplicates; 64 observations accepted; 62 described by the Continuous dictionary, 2 stored as `observed` signals; 0 rejected, 0 warnings |
 | 2026-11-02 | `tools/dictgen` over both dictionary PDFs | Continuous: 1141 entries (v1.0.0, 2025-09-11); Historical: 5140 entries — matching the unique key counts of the PDFs |
 | 2026-11-02 | Collector against `fakeportal` (synthetic imitation of E4–E6 behaviour) | cookie and password (Auth0 page) modes, checkpoints, `no_content`, 429/Retry-After, expired session, bot challenge refusal — **not** a live verification |
-| 2026-11-02 | Live owner test, password mode: the collector stopped with "bot challenge" before submitting credentials | **Our bug.** The check matched captcha scripts that Auth0's sign-in page always loads. The E4 client (HA_VAG-EU-Data-Act) submits the form without such a pre-check. A challenge is now detected only from a captcha the form actually demands, a challenge page served instead of the form, or a rejected submission. Retest pending |
+| 2026-11-02 | Live owner test, password mode: the collector stopped with "bot challenge" before submitting credentials | **Our bug.** The check matched captcha scripts that Auth0's sign-in page always loads. The E4 client (HA_VAG-EU-Data-Act) submits the form without such a pre-check. A challenge is now detected only from a captcha the form actually demands, a challenge page served instead of the form, or a rejected submission. Retested the same day; see the next row |
 | 2026-11-02 | Live owner test after that fix (CUPRA, password mode) | **Verified by the owner:** scripted login (Auth0), authorization and collection of a continuous delivery into WagenPulse. One account, one vehicle; session lifetime not yet observed |
 
 ## Unresolved gaps and what would close them
@@ -111,7 +111,8 @@ Last reviewed: 2026-11-02.
 |---|---|
 | Historical export structure | One real historical export archive (sanitized structure is enough) |
 | Dotted (MEB) continuous layout | One real MEB delivery |
-| Live verification of the unofficial collector | An operator running the collector against their own account; results recorded here without identifiers |
+| Cookie mode of the unofficial collector (`session_cookie`) | An operator running the collector in cookie mode against their own account; results recorded here without identifiers |
+| Session lifetime of the portal login | An operator recording how long a session stays valid, without identifiers. Scripted login and collection in password mode are verified live once by the owner (2026-11-02) |
 | Official API | A VW-published API reference, OAuth client registration process and terms for data recipients |
 | V5.0 dictionary | The newer dictionary PDF; import it with `wagenpulse dictionary import` |
 
