@@ -33,6 +33,9 @@ func WithClock(c clock.Clock) Option { return func(o *store.Options) { o.Clock =
 // WithDir uses dir as the data directory instead of a fresh temp dir.
 func WithDir(dir string) Option { return func(o *store.Options) { o.DataDir = dir } }
 
+// WithBusyTimeout sets SQLite's busy_timeout, for tests where several stores contend for the write lock under -race.
+func WithBusyTimeout(d time.Duration) Option { return func(o *store.Options) { o.BusyTimeout = d } }
+
 // Open opens a store in a new temporary data directory and closes it at test cleanup. Any successful write
 // transaction slower than MaxTxDuration fails the test.
 func Open(t testing.TB, opts ...Option) *store.Store {
