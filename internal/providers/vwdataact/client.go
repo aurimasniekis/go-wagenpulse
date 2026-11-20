@@ -28,8 +28,11 @@ import (
 )
 
 // Default portal and identity hosts (fixed; not configurable through the API to avoid SSRF).
+//
+// The portal moved on 2026-11-16 from eu-data-act.drivesomethinggreater.com, which now only answers with permanent
+// redirects (API paths end in 404), to eu-data-act.vwgroup-datahub.com (docs/CAPABILITIES.md E7).
 const (
-	DefaultBaseURL      = "https://eu-data-act.drivesomethinggreater.com"
+	DefaultBaseURL      = "https://eu-data-act.vwgroup-datahub.com"
 	DefaultIdentityBase = "https://identity.vwgroup.io"
 
 	vehiclesPath = "/proxy_api/consent/me/vehicles"
@@ -428,6 +431,12 @@ func (c *Client) getOnce(ctx context.Context, endpoint, rawURL string, headers m
 	if err != nil {
 		return nil, 0, err
 	}
+	if resp.moved != 0 && endpoint != EndpointDownload {
+		// Not followed: the portal and identity hosts are pinned, and an API path on a moved host is no answer at all
+		// (the old host rewrites API paths to pages that answer 404, which would read as "no active request").
+		return nil, resp.moved, &Error{Class: ClassProtocol, Status: resp.moved, Endpoint: endpoint,
+			Msg: "the portal answered with a permanent redirect to another host; it has probably moved and WagenPulse needs an update"}
+	}
 	if c.sessionRejected(resp) && c.login != nil && c.Logins() == 0 {
 		if lerr := c.Login(ctx); lerr != nil {
 			return nil, resp.status, lerr
@@ -448,6 +457,9 @@ type response struct {
 	status      int
 	finalURL    *url.URL
 	contentType string
+	// moved is the status of a permanent redirect (301/308) from the portal host to a host other than the portal and
+	// the identity provider, the way a portal that moved hosts answers (0 = none).
+	moved int
 }
 
 // sessionRejected reports a 401/403, a redirect into the sign-in flow (onto the identity provider, or onto the portal
@@ -523,7 +535,29 @@ func (c *Client) do(ctx context.Context, rawURL string, headers map[string]strin
 	if int64(len(body)) > limit {
 		return response{status: resp.StatusCode}, &Error{Class: ClassTooLarge, Msg: "the portal response exceeds the size limit"}
 	}
-	return response{body: body, status: resp.StatusCode, finalURL: resp.Request.URL, contentType: resp.Header.Get("Content-Type")}, nil
+	return response{body: body, status: resp.StatusCode, finalURL: resp.Request.URL, contentType: resp.Header.Get("Content-Type"),
+		moved: c.movedAway(resp.Request)}, nil
+}
+
+// movedAway walks the redirect chain that ended in req and returns the status of a permanent redirect (301/308) from
+// the portal host to another host that is not the identity provider (0 = none).
+func (c *Client) movedAway(req *http.Request) int {
+	base, err := url.Parse(c.cfg.BaseURL)
+	if err != nil {
+		return 0
+	}
+	identity, _ := url.Parse(c.cfg.IdentityBase)
+	for r := req; r != nil && r.Response != nil; r = r.Response.Request {
+		from, to := r.Response.Request, r.URL
+		if from == nil || (r.Response.StatusCode != http.StatusMovedPermanently && r.Response.StatusCode != http.StatusPermanentRedirect) {
+			continue
+		}
+		if strings.EqualFold(from.URL.Host, base.Host) && !strings.EqualFold(to.Host, base.Host) &&
+			(identity == nil || !strings.EqualFold(to.Host, identity.Host)) {
+			return r.Response.StatusCode
+		}
+	}
+	return 0
 }
 
 // pace enforces MinInterval between requests.

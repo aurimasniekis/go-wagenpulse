@@ -5,6 +5,24 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- The portal collector uses the portal's new host. On 2026-11-16 the EU Data Act portal moved from
+  `eu-data-act.drivesomethinggreater.com` to `eu-data-act.vwgroup-datahub.com`. The old host only redirects, and its
+  API paths end in HTTP 404. Collection stopped: the 404 of every data request read as "no active data request", and
+  the session check then failed with "unexpected status (404 from vehicles)". A permanent redirect from the portal to
+  another host is now reported as a moved portal (`protocol`, naming the endpoint), never as "no active request".
+  Sources in password mode sign in on the new host by themselves. Sources in cookie mode need a session cookie from
+  the new host.
+- Telling an expired session from "no active data request" no longer depends on the vehicle-list endpoint, whose live
+  shape is unverified. When every request reports "no active request" on a stored session, password mode signs in
+  again once and asks again. If the fresh session gives the same answer, the source reports `no_active_request` and
+  does not sign in again on later runs until "Collect now" or a credential change. Cookie mode still asks the vehicle
+  list, but only a rejected session or an empty list needs reauthorization. A vehicle list that fails otherwise (for
+  example with 404) no longer fails the run: the run reports "no active request" and logs the endpoint and status.
+  The session check after a password sign-in fails only when the session is rejected, a challenge appears or the portal
+  rate-limits.
+
 ## [0.1.3] - 2026-11-20
 
 ### Fixed

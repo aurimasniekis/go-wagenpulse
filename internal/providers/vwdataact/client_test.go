@@ -57,3 +57,40 @@ func TestRedirectClassification(t *testing.T) {
 		}
 	}
 }
+
+// A permanent redirect from the portal host to another host is a moved portal, not "no active request" (the old host
+// rewrites API paths to pages that answer 404). A redirect into the identity provider stays an expired session.
+func TestPermanentRedirectOffThePortalIsAMove(t *testing.T) {
+	other := httptest.NewServer(http.NotFoundHandler())
+	defer other.Close()
+	identity := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte("<html><form>sign in</form></html>"))
+	}))
+	defer identity.Close()
+	var target string
+	var code int
+	portal := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target+"/en"+r.URL.Path, code)
+	}))
+	defer portal.Close()
+	cl, err := New(Config{BaseURL: portal.URL, IdentityBase: identity.URL, MinInterval: time.Millisecond}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, c := range []int{http.StatusMovedPermanently, http.StatusPermanentRedirect} {
+		target, code = other.URL, c
+		_, err := cl.Identifier(ctx, "WVWZZZTEST0000001", RequestContinuous)
+		if ClassOf(err) != ClassProtocol || EndpointOf(err) != EndpointIdentifier {
+			t.Errorf("%d to another host: got %v, want a moved portal", c, err)
+		}
+		if _, err := cl.Vehicles(ctx); ClassOf(err) != ClassProtocol {
+			t.Errorf("%d to another host (vehicles): got %v", c, err)
+		}
+	}
+	target, code = identity.URL, http.StatusMovedPermanently
+	if _, err := cl.Identifier(ctx, "WVWZZZTEST0000001", RequestContinuous); ClassOf(err) != ClassAuth {
+		t.Errorf("301 into the identity provider: got %v, want an expired session", err)
+	}
+}
