@@ -112,7 +112,8 @@ func (c *Collector) CollectNow(ctx context.Context, actor audit.Actor, id string
 		return apperr.New(apperr.CodeConflict, "the source is disabled")
 	}
 	if err := c.svc.s.W().TxNamed(ctx, "sources.collect_now", func(tx *store.Tx) error {
-		if _, err := tx.SQL.ExecContext(ctx, `UPDATE source_status SET next_run_at = NULL, retry_after = NULL WHERE source_id = ?`, id); err != nil {
+		if _, err := tx.SQL.ExecContext(ctx, `UPDATE source_status SET next_run_at = NULL, retry_after = NULL,
+			last_error_class = CASE WHEN last_error_class = '`+classNoVehicles+`' THEN '' ELSE last_error_class END WHERE source_id = ?`, id); err != nil {
 			return err
 		}
 		_, err := c.svc.audit.Append(ctx, tx, audit.Event{Actor: actor, Action: "source.collect_requested", Target: audit.Target{Type: "source", ID: id}})
@@ -268,26 +269,45 @@ func (c *Collector) collect(ctx context.Context, src Source) (runOutcome, *time.
 	}
 	var latest *time.Time
 	stored := map[string][]ingest.StoredDelivery{}
-	noRequest := 0
-	for _, v := range vehs {
-		for _, rt := range types {
-			ds, newest, err := c.collectOne(ctx, src, cl, v, rt)
-			if err != nil {
-				if vwdataact.ClassOf(err) == vwdataact.ClassNoRequest {
-					noRequest++
-					continue
+	pass := func() (int, error) {
+		noRequest := 0
+		for _, v := range vehs {
+			for _, rt := range types {
+				ds, newest, err := c.collectOne(ctx, src, cl, v, rt)
+				if err != nil {
+					if vwdataact.ClassOf(err) == vwdataact.ClassNoRequest {
+						noRequest++
+						continue
+					}
+					return noRequest, err
 				}
-				// Imports for what was stored so far still happen.
-				c.createImports(ctx, src, stored)
-				return outcomeFor(err), latest
+				if newest != nil && (latest == nil || newest.After(*latest)) {
+					latest = newest
+				}
+				stored[rt] = append(stored[rt], ds...)
 			}
-			if newest != nil && (latest == nil || newest.After(*latest)) {
-				latest = newest
-			}
-			stored[rt] = append(stored[rt], ds...)
+		}
+		return noRequest, nil
+	}
+	noRequest, err := pass()
+	noVehicles := false
+	if err == nil && len(types) > 0 && noRequest == len(vehs)*len(types) {
+		// Every request answered "no active request". An expired session can look like that, so check the session
+		// before believing it, and run the pass once more on a fresh session (at most one login per run).
+		var retry bool
+		if retry, noVehicles, err = c.checkSession(ctx, src, cl); err == nil && retry {
+			noRequest, err = pass()
 		}
 	}
+	// Imports for what was stored so far happen even when the run then fails.
 	c.createImports(ctx, src, stored)
+	if err != nil {
+		return outcomeFor(err), latest
+	}
+	if noVehicles {
+		return runOutcome{state: "no_active_request", class: classNoVehicles, success: true,
+			reason: "signed in, but the portal account lists no vehicles; link the vehicle to the account in the portal, then use Collect now"}, latest
+	}
 	if noRequest == len(vehs)*len(types) {
 		return runOutcome{state: "no_active_request", reason: "no active data request on the portal; create a continuous request in the portal (it renews about every 12 months)",
 			class: vwdataact.ClassNoRequest, success: true}, latest
@@ -297,6 +317,49 @@ func (c *Collector) collect(ctx context.Context, src Source) (runOutcome, *time.
 		reason = "some vehicles have no active data request on the portal"
 	}
 	return runOutcome{state: "authorized", reason: reason, success: true}, latest
+}
+
+// classNoVehicles marks a source whose trusted (fresh) portal session listed no vehicles. While it is set, the
+// collector does not sign in again to rule out an expired session; "collect now" and a credential change clear it.
+const classNoVehicles = "no_vehicles"
+
+// checkSession is called when every data request answered "no active request". It asks the portal for the account's
+// vehicles: a stored session that lists none has probably expired (the data endpoints of an expired session do not
+// reliably answer 401). In password mode it signs in again (at most once per run) and reports that the pass should
+// run once more; in cookie mode a stored session cannot be renewed, so the source needs reauthorization. A session made
+// during this run, or a cookie just entered, is trusted: if it lists no vehicles, noVehicles is set.
+func (c *Collector) checkSession(ctx context.Context, src Source, cl *vwdataact.Client) (retry, noVehicles bool, err error) {
+	before := cl.Logins()
+	portal, err := cl.Vehicles(ctx)
+	if err != nil {
+		return false, false, err
+	}
+	if cl.Logins() > before {
+		return true, false, nil // the probe itself found the session rejected and signed in again
+	}
+	if len(portal) > 0 {
+		return false, false, nil // a working session: the account really has no active request
+	}
+	// Fresh: signed in during this run, or (cookie mode) the cookie was entered since the last run.
+	fresh := before > 0 || (!cl.CanLogin() && src.Status != nil && src.Status.State == "configured")
+	known := src.Status != nil && src.Status.LastErrorClass == classNoVehicles
+	if fresh || known {
+		return false, true, nil
+	}
+	if !cl.CanLogin() {
+		return false, false, &vwdataact.Error{Class: vwdataact.ClassAuth, Msg: "the portal session no longer lists any vehicles; it has probably expired. Paste a fresh session cookie from your browser"}
+	}
+	c.log.InfoContext(ctx, "the stored portal session lists no vehicles; signing in again")
+	if err := cl.Login(ctx); err != nil {
+		return false, false, err
+	}
+	if portal, err = cl.Vehicles(ctx); err != nil {
+		return false, false, err
+	}
+	if len(portal) == 0 {
+		return false, true, nil
+	}
+	return true, false, nil
 }
 
 // collectOne handles one (vehicle, request type): metadata → list → download new files.
@@ -433,6 +496,10 @@ func outcomeFor(err error) runOutcome {
 	}
 }
 
+// stuckNoRequestRuns is the number of consecutive "no active request" runs after which a source stops counting as
+// successfully collected (one hour at the default 15-minute interval).
+const stuckNoRequestRuns = 4
+
 // backoffLadder spaces retries after consecutive failures (5, 15, 30, 60 minutes; never faster than the interval).
 var backoffLadder = []time.Duration{5 * time.Minute, 15 * time.Minute, 30 * time.Minute, time.Hour}
 
@@ -440,10 +507,26 @@ func (c *Collector) record(ctx context.Context, src Source, started time.Time, o
 	interval := time.Duration(src.IntervalMinutes) * time.Minute
 	return c.svc.s.W().TxNamed(ctx, "sources.record", func(tx *store.Tx) error {
 		var failures int64
-		_ = tx.SQL.QueryRowContext(ctx, `SELECT consecutive_failures FROM source_status WHERE source_id = ?`, src.ID).Scan(&failures)
+		var prevState string
+		_ = tx.SQL.QueryRowContext(ctx, `SELECT consecutive_failures, state FROM source_status WHERE source_id = ?`, src.ID).Scan(&failures, &prevState)
+		if out.state == "no_active_request" {
+			if prevState != "no_active_request" {
+				failures = 0 // a new streak; earlier failures of another kind do not count
+			}
+			// Repeated "no active request" is counted. Once it persists it is no longer a silent success: the last
+			// success time stops advancing (lag alerts fire), the reason says so and the retry backs off.
+			if failures+1 >= stuckNoRequestRuns {
+				out.success = false
+				out.reason = fmt.Sprintf("%s (reported by %d consecutive runs; if the portal shows an active request in a browser, reauthorize the source)",
+					out.reason, failures+1)
+				c.log.WarnContext(ctx, "the source keeps reporting no active data request", "runs", failures+1)
+			}
+		}
 		next := started.Add(interval)
 		var retry any
-		if out.success {
+		if out.state == "no_active_request" && out.success {
+			failures++ // still counted toward stuckNoRequestRuns
+		} else if out.success {
 			failures = 0
 			// Align to the portal cadence: the next delivery is expected one interval after the newest, plus a buffer.
 			if latest != nil {

@@ -158,6 +158,7 @@ func TestStatesAuthRateLimitNoRequest(t *testing.T) {
 	if _, err := e.svc.Update(context.Background(), audit.System, src.ID, 0, in); err != nil {
 		t.Fatal(err)
 	}
+	e.portal.Set(func(p *fakeportal.Portal) { p.Requests[vin] = map[string]string{} }) // the account holds the vehicle, no request
 	if got := e.runOnce(t, src.ID); got.Status.State != "no_active_request" {
 		t.Fatalf("no request: %+v", got.Status)
 	}
@@ -254,5 +255,150 @@ func TestUnboundSourceNamesMatchingVehicles(t *testing.T) {
 	got := e.runOnce(t, src.ID).Status
 	if got.State != "authorized" || !strings.Contains(got.Reason, "matching: Car") || strings.Contains(got.Reason, vin) {
 		t.Fatalf("unbound status: %+v", got)
+	}
+}
+
+// Regression: a stored portal session that expired was reported as "no active data request" (a success) and the
+// collector never signed in again, so deliveries stopped although the request was active. An expired session does not
+// necessarily answer 401: it can redirect into the sign-in flow (an HTML page with status 200) or answer like an
+// account with nothing on it. In password mode the collector now signs in again (once) and collects.
+func TestExpiredSessionSignsInAgainInsteadOfNoRequest(t *testing.T) {
+	for _, mode := range []string{fakeportal.ExpiredUnauthorized, fakeportal.ExpiredRedirect, fakeportal.ExpiredEmpty} {
+		t.Run("expired="+mode, func(t *testing.T) {
+			e := newEnv(t)
+			now := time.Now().UTC().Truncate(time.Second)
+			e.portal.Set(func(p *fakeportal.Portal) {
+				p.Email, p.Password = "owner@example.com", "portal-password"
+				p.Requests[vin] = map[string]string{"partial": "req-1"}
+				p.Files["req-1"] = []fakeportal.File{{Name: "a.zip", CreatedOn: now.Add(-time.Hour), Data: synthetic("2026-11-01T07:00:00.000Z", "61")}}
+			})
+			user := "owner@example.com"
+			src := e.source(t, AuthPassword, "portal-password", &user)
+			if got := e.runOnce(t, src.ID); got.Status.State != "authorized" {
+				t.Fatalf("first run: %+v", got.Status)
+			}
+			// The stored session expires; a new delivery is waiting on the portal.
+			e.portal.Set(func(p *fakeportal.Portal) {
+				p.SessionCookie, p.Expired = "fresh-session", mode
+				p.Files["req-1"] = append(p.Files["req-1"], fakeportal.File{Name: "b.zip", CreatedOn: now, Data: synthetic("2026-11-01T07:15:00.000Z", "62")})
+			})
+			logins := e.portal.Hits["/login"]
+			got := e.runOnce(t, src.ID)
+			if got.Status.State != "authorized" {
+				t.Fatalf("expired session reported as %+v", got.Status)
+			}
+			if n := e.portal.Hits["/login"] - logins; n != 1 {
+				t.Fatalf("signed in %d times in one run, want 1", n)
+			}
+			var stored int
+			if err := e.s.ReadDB().QueryRow(`SELECT count(*) FROM remote_files WHERE name = 'b.zip' AND outcome = 'stored'`).Scan(&stored); err != nil || stored != 1 {
+				t.Fatalf("new delivery not collected after signing in again (%d, %v)", stored, err)
+			}
+		})
+	}
+}
+
+// In cookie mode an expired session cannot be renewed: it must surface as reauthorization_required, not as "no active
+// request".
+func TestExpiredCookieSessionNeedsReauthorization(t *testing.T) {
+	for _, mode := range []string{fakeportal.ExpiredRedirect, fakeportal.ExpiredEmpty} {
+		t.Run("expired="+mode, func(t *testing.T) {
+			e := newEnv(t)
+			e.portal.Set(func(p *fakeportal.Portal) { p.Requests[vin] = map[string]string{"partial": "req-1"} })
+			src := e.source(t, AuthSessionCookie, "PORTALSESSION=valid-session", nil)
+			first := e.runOnce(t, src.ID).Status
+			if first.State != "authorized" {
+				t.Fatalf("first run: %+v", first)
+			}
+			// The cookie that worked expires.
+			e.portal.Set(func(p *fakeportal.Portal) { p.SessionCookie, p.Expired = "fresh-session", mode })
+			got := e.runOnce(t, src.ID).Status
+			if got.State != "reauthorization_required" || !got.LastSuccessAt.Equal(*first.LastSuccessAt) {
+				t.Fatalf("expired cookie reported as %+v", got)
+			}
+		})
+	}
+}
+
+// A cookie that was just entered is trusted: an account without vehicles is reported as such, not as an expired session.
+func TestFreshCookieWithoutVehiclesIsNotExpired(t *testing.T) {
+	e := newEnv(t)
+	src := e.source(t, AuthSessionCookie, "PORTALSESSION=valid-session", nil)
+	got := e.runOnce(t, src.ID).Status
+	if got.State != "no_active_request" || got.LastErrorClass != "no_vehicles" || strings.Contains(got.Reason, "expired") {
+		t.Fatalf("fresh cookie, no vehicles: %+v", got)
+	}
+}
+
+// Signing in again is bounded to one login per run, and a login that meets a challenge is a failure, not a success.
+func TestReloginIsBoundedAndChallengeIsAFailure(t *testing.T) {
+	e := newEnv(t)
+	e.portal.Set(func(p *fakeportal.Portal) {
+		p.Email, p.Password = "owner@example.com", "portal-password"
+		p.Requests[vin] = map[string]string{"partial": "req-1"}
+	})
+	user := "owner@example.com"
+	src := e.source(t, AuthPassword, "portal-password", &user)
+	if got := e.runOnce(t, src.ID); got.Status.State != "authorized" {
+		t.Fatalf("first run: %+v", got.Status)
+	}
+	// The account lists no vehicles even with a working session: one fresh login rules out an expired session. Once
+	// a fresh session confirmed it, later runs do not sign in again until "collect now".
+	e.portal.Set(func(p *fakeportal.Portal) { delete(p.Requests, vin) })
+	for i, want := range []int{1, 0, 0} {
+		logins := e.portal.Hits["/login"]
+		got := e.runOnce(t, src.ID)
+		if got.Status.State != "no_active_request" || got.Status.LastErrorClass != "no_vehicles" || !strings.Contains(got.Status.Reason, "lists no vehicles") {
+			t.Fatalf("run %d, no vehicles: %+v", i, got.Status)
+		}
+		if n := e.portal.Hits["/login"] - logins; n != want {
+			t.Fatalf("run %d signed in %d times, want %d", i, n, want)
+		}
+	}
+	if err := e.col.CollectNow(context.Background(), audit.System, src.ID); err != nil {
+		t.Fatal(err)
+	}
+	logins := e.portal.Hits["/login"]
+	e.runOnce(t, src.ID)
+	if n := e.portal.Hits["/login"] - logins; n != 1 {
+		t.Fatalf("after collect now signed in %d times, want 1", n)
+	}
+	// The session expires and the sign-in now demands a captcha: a failure that needs the owner.
+	e.portal.Set(func(p *fakeportal.Portal) {
+		p.Requests[vin] = map[string]string{"partial": "req-1"}
+		p.SessionCookie, p.Expired, p.Captcha = "fresh-session", fakeportal.ExpiredRedirect, true
+	})
+	posts := e.portal.Hits["/u/login"]
+	got := e.runOnce(t, src.ID)
+	if got.Status.State != "reauthorization_required" || got.Status.LastErrorClass != "challenge" {
+		t.Fatalf("challenge on re-login: %+v", got.Status)
+	}
+	// The followed redirect of the expired session, then one login: the sign-in page GET and a single credential POST.
+	if n := e.portal.Hits["/u/login"] - posts; n != 3 {
+		t.Fatalf("re-login hit /u/login %d times, want 3", n)
+	}
+}
+
+// A source that keeps reporting "no active request" stops counting as a silent success.
+func TestPersistentNoRequestIsSurfaced(t *testing.T) {
+	e := newEnv(t)
+	e.portal.Set(func(p *fakeportal.Portal) { p.Requests[vin] = map[string]string{} })
+	src := e.source(t, AuthSessionCookie, "PORTALSESSION=valid-session", nil)
+	var last Source
+	for i := 1; i < stuckNoRequestRuns; i++ {
+		last = e.runOnce(t, src.ID)
+		if last.Status.State != "no_active_request" || last.Status.LastSuccessAt == nil || last.Status.ConsecutiveFailures != int64(i) {
+			t.Fatalf("run %d: %+v", i, last.Status)
+		}
+	}
+	got := e.runOnce(t, src.ID).Status
+	if got.State != "no_active_request" || got.ConsecutiveFailures != stuckNoRequestRuns || !got.LastSuccessAt.Equal(*last.Status.LastSuccessAt) ||
+		!strings.Contains(got.Reason, "consecutive runs") {
+		t.Fatalf("persistent no request: %+v", got)
+	}
+	// A request appears: the streak ends.
+	e.portal.Set(func(p *fakeportal.Portal) { p.Requests[vin] = map[string]string{"partial": "req-1"} })
+	if got := e.runOnce(t, src.ID).Status; got.State != "authorized" || got.ConsecutiveFailures != 0 {
+		t.Fatalf("after a request appeared: %+v", got)
 	}
 }

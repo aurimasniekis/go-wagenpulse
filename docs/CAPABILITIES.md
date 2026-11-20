@@ -112,6 +112,8 @@ Last reviewed: 2026-11-19.
 | Historical export structure | One real historical export archive (sanitized structure is enough) |
 | Dotted (MEB) continuous layout | One real MEB delivery |
 | Cookie mode of the unofficial collector (`session_cookie`) | An operator running the collector in cookie mode against their own account; results recorded here without identifiers |
+| How the portal answers an expired session | **Unverified.** The collector treats each of these as an expired session: HTTP 401/403, a redirect into the sign-in flow (identity provider, or the portal outside `/proxy_api/`), an HTML page from the API, and an account that suddenly lists no vehicles. An operator recording which one the portal sends (status and content type only, no bodies or identifiers) closes this |
+| Vehicle list shape (`/proxy_api/consent/me/vehicles`) | **Unverified.** The collector finds VINs under `vin` or `vehicleIdentificationNumber` anywhere in the body; one live response shape (sanitized) would confirm it |
 | Session lifetime of the portal login | An operator recording how long a session stays valid, without identifiers. Scripted login and collection in password mode are verified live once by the owner (2026-11-02) |
 | Official API | A VW-published API reference, OAuth client registration process and terms for data recipients |
 | V5.0 dictionary | The newer dictionary PDF; import it with `wagenpulse dictionary import` |

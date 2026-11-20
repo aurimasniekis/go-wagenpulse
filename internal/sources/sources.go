@@ -559,6 +559,7 @@ func setStatus(ctx context.Context, tx *store.Tx, id, state, reason string, next
 		  next_run_at = coalesce(excluded.next_run_at, CASE WHEN excluded.state = 'configured' THEN NULL ELSE source_status.next_run_at END),
 		  retry_after = CASE WHEN excluded.state = 'configured' THEN NULL ELSE source_status.retry_after END,
 		  consecutive_failures = CASE WHEN excluded.state = 'configured' THEN 0 ELSE source_status.consecutive_failures END,
+		  last_error_class = CASE WHEN excluded.state = 'configured' THEN '' ELSE source_status.last_error_class END,
 		  updated_at = excluded.updated_at`, id, state, reason, n, tx.NowMicros())
 	return err
 }
