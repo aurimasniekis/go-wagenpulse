@@ -354,7 +354,7 @@ func (c *Collector) collect(ctx context.Context, src Source) (runOutcome, *time.
 		if marker == classNoRequestConfirmed {
 			class = marker
 		}
-		return runOutcome{state: "no_active_request", reason: "no active data request on the portal; create a continuous request in the portal (it renews about every 12 months)",
+		return runOutcome{state: "no_active_request", reason: "no active data request on the portal; create a continuous request on the portal (it renews about every 12 months), then use Collect now",
 			class: class, success: true, deliveries: n}, latest
 	}
 	reason := ""

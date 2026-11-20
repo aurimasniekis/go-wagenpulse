@@ -729,7 +729,7 @@ func TestPortalMovedIsReportedNotNoRequest(t *testing.T) {
 	if n := e.portal.Hits["/login"] - logins; n != 0 {
 		t.Fatalf("signed in %d times on a moved portal", n)
 	}
-	if moved.Hits["/proxy_api/consent"]+moved.Hits["/proxy_api/euda-apim/datarequest"] != 0 {
-		t.Fatalf("the redirect target was asked for data: %v", moved.Hits)
+	if moved.Total != 0 {
+		t.Fatalf("the redirect target received %d requests; a move must not be followed", moved.Total)
 	}
 }

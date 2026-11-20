@@ -3,6 +3,7 @@ package vwdataact
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -92,5 +93,37 @@ func TestPermanentRedirectOffThePortalIsAMove(t *testing.T) {
 	target, code = identity.URL, http.StatusMovedPermanently
 	if _, err := cl.Identifier(ctx, "WVWZZZTEST0000001", RequestContinuous); ClassOf(err) != ClassAuth {
 		t.Errorf("301 into the identity provider: got %v, want an expired session", err)
+	}
+}
+
+// A permanent redirect from the portal host to a foreign host is not followed (the request carries the VIN in its
+// path); redirects within the portal, into the identity provider, and downloads handed to a storage host still work.
+func TestCrossHostPermanentRedirectNotFollowed(t *testing.T) {
+	var hits int
+	foreign := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("{}"))
+	}))
+	defer foreign.Close()
+	for _, code := range []int{http.StatusMovedPermanently, http.StatusPermanentRedirect} {
+		hits = 0
+		portal := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, foreign.URL+"/en"+r.URL.Path, code)
+		}))
+		cl, err := New(Config{BaseURL: portal.URL, IdentityBase: "http://identity.invalid", MinInterval: time.Millisecond}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _, gerr := cl.get(context.Background(), EndpointVehicles, portal.URL+"/proxy_api/x/WVWZZZTEST0000001", nil, 1<<20)
+		var pe *Error
+		if !errors.As(gerr, &pe) || pe.Class != ClassProtocol || pe.Status != code || pe.Endpoint != EndpointVehicles {
+			t.Fatalf("%d: want a protocol error for a moved portal, got %v", code, gerr)
+		}
+		if hits != 0 {
+			t.Fatalf("%d: the redirect target received %d requests", code, hits)
+		}
+		// A 302 to the same foreign host is not a move: it is followed as before.
+		portal.Close()
 	}
 }

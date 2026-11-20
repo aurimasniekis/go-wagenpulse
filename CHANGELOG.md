@@ -11,7 +11,8 @@ All notable changes to this project are documented here. The format follows
   `eu-data-act.drivesomethinggreater.com` to `eu-data-act.vwgroup-datahub.com`. The old host only redirects, and its
   API paths end in HTTP 404. Collection stopped: the 404 of every data request read as "no active data request", and
   the session check then failed with "unexpected status (404 from vehicles)". A permanent redirect from the portal to
-  another host is now reported as a moved portal (`protocol`, naming the endpoint), never as "no active request".
+  another host is now reported as a moved portal (`protocol`, naming the endpoint), never as "no active request". The redirect is not followed, so the request (with the vehicle identifier in its
+  path) never reaches the new host.
   Sources in password mode sign in on the new host by themselves. Sources in cookie mode need a session cookie from
   the new host.
 - Telling an expired session from "no active data request" no longer depends on the vehicle-list endpoint, whose live

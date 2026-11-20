@@ -210,6 +210,7 @@ func New(cfg Config, login func(ctx context.Context, c *Client) error) (*Client,
 	if err != nil {
 		return nil, err
 	}
+	var c *Client
 	hc := &http.Client{Transport: base.Transport, Timeout: base.Timeout, Jar: jar, CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 15 {
 			return errors.New("too many redirects")
@@ -217,9 +218,14 @@ func New(cfg Config, login func(ctx context.Context, c *Client) error) (*Client,
 		if req.URL.Scheme != "https" && !strings.HasPrefix(cfg.BaseURL, "http://") {
 			return errors.New("refusing a non-https redirect")
 		}
+		// A permanent redirect from the portal host to a foreign host is not followed: the request (with the VIN in its
+		// path) must never reach it. The 301/308 itself is returned and do() records the move.
+		if req.Response != nil && req.Context().Value(downloadKey{}) == nil && c.isMove(req.Response, req.URL) {
+			return http.ErrUseLastResponse
+		}
 		return nil
 	}}
-	c := &Client{cfg: cfg, hc: hc}
+	c = &Client{cfg: cfg, hc: hc}
 	if login != nil {
 		c.login = func(ctx context.Context) error { return login(ctx, c) }
 	}
@@ -411,6 +417,7 @@ func parseTime(raw json.RawMessage) *time.Time {
 
 // Download returns one delivered file (bounded by MaxDownload).
 func (c *Client) Download(ctx context.Context, vin, identifier, requestType, name string) ([]byte, error) {
+	ctx = context.WithValue(ctx, downloadKey{}, true) // download redirects (to a storage host) are followed
 	body, _, err := c.get(ctx, EndpointDownload, c.cfg.BaseURL+fmt.Sprintf(downloadPath, url.PathEscape(vin), url.PathEscape(identifier)),
 		map[string]string{"filename": name, "type": requestType}, c.cfg.MaxDownload)
 	return body, err
@@ -432,7 +439,7 @@ func (c *Client) getOnce(ctx context.Context, endpoint, rawURL string, headers m
 		return nil, 0, err
 	}
 	if resp.moved != 0 && endpoint != EndpointDownload {
-		// Not followed: the portal and identity hosts are pinned, and an API path on a moved host is no answer at all
+		// Not followed (see CheckRedirect): the portal and identity hosts are pinned, and an API path on a moved host is no answer at all
 		// (the old host rewrites API paths to pages that answer 404, which would read as "no active request").
 		return nil, resp.moved, &Error{Class: ClassProtocol, Status: resp.moved, Endpoint: endpoint,
 			Msg: "the portal answered with a permanent redirect to another host; it has probably moved and WagenPulse needs an update"}
@@ -449,6 +456,24 @@ func (c *Client) getOnce(ctx context.Context, endpoint, rawURL string, headers m
 		return nil, resp.status, &Error{Class: ClassAuth, Status: resp.status, Msg: "the portal rejected the session; reauthorize the source"}
 	}
 	return resp.body, resp.status, classify(resp.status, endpoint)
+}
+
+// downloadKey marks a request context as a download, whose redirects to other hosts are legitimate.
+type downloadKey struct{}
+
+// isMove reports whether prev (a response from the portal host) is a permanent redirect (301/308) to to, a host that is
+// neither the portal nor the identity provider.
+func (c *Client) isMove(prev *http.Response, to *url.URL) bool {
+	if prev.StatusCode != http.StatusMovedPermanently && prev.StatusCode != http.StatusPermanentRedirect {
+		return false
+	}
+	base, err := url.Parse(c.cfg.BaseURL)
+	if err != nil || prev.Request == nil || to == nil {
+		return false
+	}
+	identity, _ := url.Parse(c.cfg.IdentityBase)
+	return strings.EqualFold(prev.Request.URL.Host, base.Host) && !strings.EqualFold(to.Host, base.Host) &&
+		(identity == nil || !strings.EqualFold(to.Host, identity.Host))
 }
 
 // response is what do returns: the body and where the request ended after redirects.
@@ -535,8 +560,15 @@ func (c *Client) do(ctx context.Context, rawURL string, headers map[string]strin
 	if int64(len(body)) > limit {
 		return response{status: resp.StatusCode}, &Error{Class: ClassTooLarge, Msg: "the portal response exceeds the size limit"}
 	}
+	moved := c.movedAway(resp.Request)
+	if moved == 0 && ctx.Value(downloadKey{}) == nil && (resp.StatusCode == http.StatusMovedPermanently || resp.StatusCode == http.StatusPermanentRedirect) {
+		// The redirect was not followed (see CheckRedirect): the response is the 301/308 itself.
+		if loc, lerr := resp.Location(); lerr == nil && c.isMove(resp, loc) {
+			moved = resp.StatusCode
+		}
+	}
 	return response{body: body, status: resp.StatusCode, finalURL: resp.Request.URL, contentType: resp.Header.Get("Content-Type"),
-		moved: c.movedAway(resp.Request)}, nil
+		moved: moved}, nil
 }
 
 // movedAway walks the redirect chain that ended in req and returns the status of a permanent redirect (301/308) from

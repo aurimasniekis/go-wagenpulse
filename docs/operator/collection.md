@@ -60,7 +60,7 @@ Secrets can be stored encrypted or referenced externally (`env:` / `file:`); see
 | `configured` | Not checked yet | Wait for the first run, or use **Collect now** |
 | `authorized` | Signed in, active data request found | Nothing |
 | `reauthorization_required` | Session expired, password changed, or a CAPTCHA, terms or consent prompt | Sign in on the portal in a browser, resolve any prompt, then update the secret |
-| `no_active_request` | No continuous data request for this account | Create one on the portal in a browser |
+| `no_active_request` | No continuous data request for this account | Create one on the portal in a browser, then use **Collect now** (password mode does not sign in again by itself until you do) |
 | `rate_limited` | The portal asked us to slow down | Nothing: collection resumes after `retry_after` |
 | `unavailable` | Portal errors | Nothing: retried with backoff |
 | `unsupported` | Brand or account not supported by the interface | Use uploads |

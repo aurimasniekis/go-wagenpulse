@@ -55,6 +55,8 @@ type Portal struct {
 	MovedTo string
 	// Hits counts requests by path prefix.
 	Hits map[string]int
+	// Total counts every request that reached the portal, whatever its path.
+	Total int
 	// UserAgents seen.
 	UserAgents map[string]bool
 }
@@ -89,6 +91,7 @@ func (p *Portal) serve(w http.ResponseWriter, r *http.Request) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.UserAgents[r.UserAgent()] = true
+	p.Total++
 	path := r.URL.Path
 	for _, pre := range []string{"/proxy_api/consent", "/proxy_api/euda-apim/datarequest", "/proxy_api/euda-apim/datadelivery", "/oidc", "/u/login", "/login"} {
 		if strings.HasPrefix(path, pre) {
