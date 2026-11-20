@@ -5,6 +5,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-19
+
+> **Not externally reviewed.** WagenPulse has had no external security review. It stores personal vehicle telemetry and
+> credentials for third-party accounts; review the security notes in the documentation before relying on it.
+
 ### Added
 
 - **Core platform**
@@ -26,8 +31,12 @@ All notable changes to this project are documented here. The format follows
   - Safe ZIP/JSON delivery import with content-addressed dedupe.
   - Typed observations, latest state, and hourly rollups.
   - Charts with explicit gaps, a data explorer and CSV export.
-- **Unofficial portal collector:** session-cookie or scripted login, authorization states, rate limiting and
-  checkpoints. Unverified against the live portal.
+  - Historical ("all") export format is unverified; archives that do not match a known structure are stored as
+    `unrecognized` and never decoded into invented values.
+- **Unofficial portal collector:** not an official API. Session-cookie or scripted login, authorization states, rate
+  limiting and checkpoints. Scripted login (Auth0) and collection of a continuous delivery were verified live by the
+  project owner on 2026-11-02, with one account and one vehicle. The session-cookie mode and session lifetime are
+  not yet verified live.
 - **Rules, events and delivery**
   - Rule types: threshold, change, transition and stale data.
   - Rule revisions and preview.
@@ -35,10 +44,34 @@ All notable changes to this project are documented here. The format follows
   - At-least-once delivery with retry, dead letters and replay.
 - **Operations**
   - Retention.
-  - Online `backup create`/`verify`, and `restore`.
-  - `keys rotate|retire|rewrap`.
-  - Administrative commands that work while the server runs.
+  - Online `backup create`/`verify`, and `restore` (server stopped).
+  - `keys rotate|retire|rewrap` (server stopped).
+  - Administrative commands that work while the server runs: `admin setup-token`, `admin reset-password`,
+    `audit verify`, `keys status` and `backup create`.
 - **Web UI:** React and Mantine, with Cobalt2-style light and dark themes, AA-checked colours and axe-tested pages.
+  Vehicles are shown as readable dashboards rather than raw signal dumps.
 - **Packaging:** distroless container image, Compose file, systemd unit, release workflow and archives.
 
-[Unreleased]: https://github.com/aurimasniekis/go-wagenpulse/commits/main
+### Fixed
+
+- Continuous dictionary errata: the door and safety code descriptions that the published dictionary gets wrong are
+  decoded correctly (`open_state_front_right_door`, `open_state_rear_right_door`, `safe_state_front_engine_bonnet`,
+  `safe_state_tailgate`). Stored values are never changed.
+- The collector no longer mistakes Auth0's captcha scripts for a bot challenge. A challenge is reported only when the
+  form demands a captcha, a challenge page is served instead of the form, or a submission is rejected.
+- Sources that are signed in but have no vehicles selected now say so explicitly.
+- An administrative command started while the server is still starting no longer fails with a dictionary
+  UNIQUE-constraint error.
+- API contract: 429 responses carry `Retry-After`; unrestricted API tokens return `vehicle_ids: []` instead of null;
+  the first stored settings write gets revision 2 (not the defaults' revision 1), so `If-Match` detects a concurrent
+  first write.
+- Loading the bundled dictionaries writes in smaller batches, so no single write transaction holds the database for
+  long (ADR-0002).
+
+### Security
+
+- Built with Go 1.27.4, which fixes GO-2026-6859 (an HTTP/1 server crash caused by a `MaxBytesReader` header race in
+  `net/http`). The container's build image is updated to match.
+
+[Unreleased]: https://github.com/aurimasniekis/go-wagenpulse/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/aurimasniekis/go-wagenpulse/releases/tag/v0.1.0
