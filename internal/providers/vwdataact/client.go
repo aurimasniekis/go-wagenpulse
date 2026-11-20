@@ -390,8 +390,9 @@ type response struct {
 	contentType string
 }
 
-// sessionRejected reports a 401/403, a redirect away from the portal API (into the sign-in flow), or an HTML page
-// where the API answers JSON or a file.
+// sessionRejected reports a 401/403, a redirect into the sign-in flow (onto the identity provider, or onto the portal
+// outside its API), or an HTML page where the API answers JSON or a file. A redirect to any other host (for example
+// a storage host serving a download) is not a rejection.
 func (c *Client) sessionRejected(r response) bool {
 	if r.status == http.StatusUnauthorized || r.status == http.StatusForbidden {
 		return true
@@ -399,9 +400,17 @@ func (c *Client) sessionRejected(r response) bool {
 	if r.status >= 300 {
 		return false
 	}
-	if base, err := url.Parse(c.cfg.BaseURL); err == nil && r.finalURL != nil &&
-		(!strings.EqualFold(r.finalURL.Host, base.Host) || !strings.HasPrefix(r.finalURL.Path, "/proxy_api/")) {
-		return true
+	if r.finalURL != nil {
+		base, _ := url.Parse(c.cfg.BaseURL)
+		identity, _ := url.Parse(c.cfg.IdentityBase)
+		switch {
+		case base != nil && strings.EqualFold(r.finalURL.Host, base.Host):
+			if !strings.HasPrefix(r.finalURL.Path, "/proxy_api/") {
+				return true
+			}
+		case identity != nil && strings.EqualFold(r.finalURL.Host, identity.Host):
+			return true
+		}
 	}
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(r.contentType)), "text/html")
 }

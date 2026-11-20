@@ -112,7 +112,8 @@ func (c *Collector) CollectNow(ctx context.Context, actor audit.Actor, id string
 		return apperr.New(apperr.CodeConflict, "the source is disabled")
 	}
 	if err := c.svc.s.W().TxNamed(ctx, "sources.collect_now", func(tx *store.Tx) error {
-		if _, err := tx.SQL.ExecContext(ctx, `UPDATE source_status SET next_run_at = NULL, retry_after = NULL WHERE source_id = ?`, id); err != nil {
+		if _, err := tx.SQL.ExecContext(ctx, `UPDATE source_status SET next_run_at = NULL, retry_after = NULL,
+			last_error_class = CASE WHEN last_error_class = '`+classNoVehicles+`' THEN '' ELSE last_error_class END WHERE source_id = ?`, id); err != nil {
 			return err
 		}
 		_, err := c.svc.audit.Append(ctx, tx, audit.Event{Actor: actor, Action: "source.collect_requested", Target: audit.Target{Type: "source", ID: id}})
@@ -289,11 +290,12 @@ func (c *Collector) collect(ctx context.Context, src Source) (runOutcome, *time.
 		return noRequest, nil
 	}
 	noRequest, err := pass()
+	noVehicles := false
 	if err == nil && len(types) > 0 && noRequest == len(vehs)*len(types) {
 		// Every request answered "no active request". An expired session can look like that, so check the session
 		// before believing it, and run the pass once more on a fresh session (at most one login per run).
 		var retry bool
-		if retry, err = c.checkSession(ctx, src, cl); err == nil && retry {
+		if retry, noVehicles, err = c.checkSession(ctx, src, cl); err == nil && retry {
 			noRequest, err = pass()
 		}
 	}
@@ -301,6 +303,10 @@ func (c *Collector) collect(ctx context.Context, src Source) (runOutcome, *time.
 	c.createImports(ctx, src, stored)
 	if err != nil {
 		return outcomeFor(err), latest
+	}
+	if noVehicles {
+		return runOutcome{state: "no_active_request", class: classNoVehicles, success: true,
+			reason: "signed in, but the portal account lists no vehicles; link the vehicle to the account in the portal, then use Collect now"}, latest
 	}
 	if noRequest == len(vehs)*len(types) {
 		return runOutcome{state: "no_active_request", reason: "no active data request on the portal; create a continuous request in the portal (it renews about every 12 months)",
@@ -313,30 +319,47 @@ func (c *Collector) collect(ctx context.Context, src Source) (runOutcome, *time.
 	return runOutcome{state: "authorized", reason: reason, success: true}, latest
 }
 
+// classNoVehicles marks a source whose trusted (fresh) portal session listed no vehicles. While it is set, the
+// collector does not sign in again to rule out an expired session; "collect now" and a credential change clear it.
+const classNoVehicles = "no_vehicles"
+
 // checkSession is called when every data request answered "no active request". It asks the portal for the account's
-// vehicles: a stored session that lists none has expired (the data endpoints of an expired session do not reliably
-// answer 401). In password mode it signs in again and reports that the pass should run once more; in cookie mode the
-// session cannot be renewed, so the source needs reauthorization. A session made during this run is trusted.
-func (c *Collector) checkSession(ctx context.Context, src Source, cl *vwdataact.Client) (retry bool, err error) {
+// vehicles: a stored session that lists none has probably expired (the data endpoints of an expired session do not
+// reliably answer 401). In password mode it signs in again (at most once per run) and reports that the pass should
+// run once more; in cookie mode a stored session cannot be renewed, so the source needs reauthorization. A session made
+// during this run, or a cookie just entered, is trusted: if it lists no vehicles, noVehicles is set.
+func (c *Collector) checkSession(ctx context.Context, src Source, cl *vwdataact.Client) (retry, noVehicles bool, err error) {
 	before := cl.Logins()
 	portal, err := cl.Vehicles(ctx)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	if cl.Logins() > before {
-		return true, nil // the probe itself found the session rejected and signed in again
+		return true, false, nil // the probe itself found the session rejected and signed in again
 	}
-	if len(portal) > 0 || before > 0 {
-		return false, nil // a working session: the account really has no active request
+	if len(portal) > 0 {
+		return false, false, nil // a working session: the account really has no active request
+	}
+	// Fresh: signed in during this run, or (cookie mode) the cookie was entered since the last run.
+	fresh := before > 0 || (!cl.CanLogin() && src.Status != nil && src.Status.State == "configured")
+	known := src.Status != nil && src.Status.LastErrorClass == classNoVehicles
+	if fresh || known {
+		return false, true, nil
 	}
 	if !cl.CanLogin() {
-		return false, &vwdataact.Error{Class: vwdataact.ClassAuth, Msg: "the portal session no longer lists any vehicles; it has probably expired. Paste a fresh session cookie from your browser"}
+		return false, false, &vwdataact.Error{Class: vwdataact.ClassAuth, Msg: "the portal session no longer lists any vehicles; it has probably expired. Paste a fresh session cookie from your browser"}
 	}
 	c.log.InfoContext(ctx, "the stored portal session lists no vehicles; signing in again")
 	if err := cl.Login(ctx); err != nil {
-		return false, err
+		return false, false, err
 	}
-	return true, nil
+	if portal, err = cl.Vehicles(ctx); err != nil {
+		return false, false, err
+	}
+	if len(portal) == 0 {
+		return false, true, nil
+	}
+	return true, false, nil
 }
 
 // collectOne handles one (vehicle, request type): metadata → list → download new files.

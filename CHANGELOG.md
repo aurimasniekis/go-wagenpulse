@@ -13,9 +13,11 @@ All notable changes to this project are documented here. The format follows
   deliveries stopped although the data request was still active. A redirect into the sign-in flow or an HTML page from
   the API now counts as an expired session. When every request reports "no active request", the collector also checks
   whether the session still lists vehicles. In password mode it then signs in again, at most once per run. In cookie
-  mode the source moves to `reauthorization_required`.
+  mode the source moves to `reauthorization_required`. If a fresh session also lists no vehicles, the source reports
+  that the account has no vehicles and does not sign in again until "Collect now" or a credential change.
 - A source that reports `no_active_request` for 4 consecutive runs no longer counts as a success. Its last-success
-  time stops advancing, the reason gives the number of runs, a warning is logged and retries back off.
+  time stops advancing, the reason gives the number of runs, a warning is logged and retries back off. The source page
+  shows these runs as "Runs without a request" rather than as failures.
 
 ## [0.1.1] - 2026-11-20
 

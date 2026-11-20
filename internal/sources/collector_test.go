@@ -304,15 +304,29 @@ func TestExpiredCookieSessionNeedsReauthorization(t *testing.T) {
 	for _, mode := range []string{fakeportal.ExpiredRedirect, fakeportal.ExpiredEmpty} {
 		t.Run("expired="+mode, func(t *testing.T) {
 			e := newEnv(t)
-			e.portal.Set(func(p *fakeportal.Portal) {
-				p.Requests[vin] = map[string]string{"partial": "req-1"}
-				p.SessionCookie, p.Expired = "fresh-session", mode
-			})
+			e.portal.Set(func(p *fakeportal.Portal) { p.Requests[vin] = map[string]string{"partial": "req-1"} })
 			src := e.source(t, AuthSessionCookie, "PORTALSESSION=valid-session", nil)
-			if got := e.runOnce(t, src.ID); got.Status.State != "reauthorization_required" || got.Status.LastSuccessAt != nil {
-				t.Fatalf("expired cookie reported as %+v", got.Status)
+			first := e.runOnce(t, src.ID).Status
+			if first.State != "authorized" {
+				t.Fatalf("first run: %+v", first)
+			}
+			// The cookie that worked expires.
+			e.portal.Set(func(p *fakeportal.Portal) { p.SessionCookie, p.Expired = "fresh-session", mode })
+			got := e.runOnce(t, src.ID).Status
+			if got.State != "reauthorization_required" || !got.LastSuccessAt.Equal(*first.LastSuccessAt) {
+				t.Fatalf("expired cookie reported as %+v", got)
 			}
 		})
+	}
+}
+
+// A cookie that was just entered is trusted: an account without vehicles is reported as such, not as an expired session.
+func TestFreshCookieWithoutVehiclesIsNotExpired(t *testing.T) {
+	e := newEnv(t)
+	src := e.source(t, AuthSessionCookie, "PORTALSESSION=valid-session", nil)
+	got := e.runOnce(t, src.ID).Status
+	if got.State != "no_active_request" || got.LastErrorClass != "no_vehicles" || strings.Contains(got.Reason, "expired") {
+		t.Fatalf("fresh cookie, no vehicles: %+v", got)
 	}
 }
 
@@ -328,17 +342,26 @@ func TestReloginIsBoundedAndChallengeIsAFailure(t *testing.T) {
 	if got := e.runOnce(t, src.ID); got.Status.State != "authorized" {
 		t.Fatalf("first run: %+v", got.Status)
 	}
-	// The account lists no vehicles even with a working session: one fresh login per run to rule out an expired
-	// session, never a loop.
+	// The account lists no vehicles even with a working session: one fresh login rules out an expired session. Once
+	// a fresh session confirmed it, later runs do not sign in again until "collect now".
 	e.portal.Set(func(p *fakeportal.Portal) { delete(p.Requests, vin) })
-	for range 2 {
+	for i, want := range []int{1, 0, 0} {
 		logins := e.portal.Hits["/login"]
-		if got := e.runOnce(t, src.ID); got.Status.State != "no_active_request" {
-			t.Fatalf("no vehicles: %+v", got.Status)
+		got := e.runOnce(t, src.ID)
+		if got.Status.State != "no_active_request" || got.Status.LastErrorClass != "no_vehicles" || !strings.Contains(got.Status.Reason, "lists no vehicles") {
+			t.Fatalf("run %d, no vehicles: %+v", i, got.Status)
 		}
-		if n := e.portal.Hits["/login"] - logins; n != 1 {
-			t.Fatalf("signed in %d times in one run, want 1", n)
+		if n := e.portal.Hits["/login"] - logins; n != want {
+			t.Fatalf("run %d signed in %d times, want %d", i, n, want)
 		}
+	}
+	if err := e.col.CollectNow(context.Background(), audit.System, src.ID); err != nil {
+		t.Fatal(err)
+	}
+	logins := e.portal.Hits["/login"]
+	e.runOnce(t, src.ID)
+	if n := e.portal.Hits["/login"] - logins; n != 1 {
+		t.Fatalf("after collect now signed in %d times, want 1", n)
 	}
 	// The session expires and the sign-in now demands a captcha: a failure that needs the owner.
 	e.portal.Set(func(p *fakeportal.Portal) {

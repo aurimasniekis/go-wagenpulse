@@ -202,7 +202,7 @@ function SourceDetail() {
           hint={`Every ${String(s.interval_minutes)} min`}
         />
         <Kpi
-          label="Consecutive failures"
+          label={st?.state === 'no_active_request' ? 'Runs without a request' : 'Consecutive failures'}
           value={fmtNumber(st?.consecutive_failures ?? 0)}
           color={(st?.consecutive_failures ?? 0) > 0 ? 'var(--wp-warning)' : undefined}
           hint={st?.last_error_class ? `last: ${st.last_error_class}` : undefined}
