@@ -42,8 +42,9 @@ func WithDir(dir string) Option { return func(o *store.Options) { o.DataDir = di
 // WithBusyTimeout sets SQLite's busy_timeout, for tests where several stores contend for the write lock under -race.
 func WithBusyTimeout(d time.Duration) Option { return func(o *store.Options) { o.BusyTimeout = d } }
 
-// Open opens a store in a new temporary data directory and closes it at test cleanup. Any successful write
-// transaction slower than MaxTxDuration fails the test.
+// Open opens a store in a new temporary data directory and closes it at test cleanup. For every successful write
+// transaction the callback body (the work done while holding the write lock) is checked against MaxTxDuration and
+// COMMIT against MaxCommitDuration; exceeding either fails the test.
 func Open(t testing.TB, opts ...Option) *store.Store {
 	t.Helper()
 	var mu sync.Mutex

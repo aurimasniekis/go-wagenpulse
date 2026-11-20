@@ -485,6 +485,25 @@ func TestTxPhaseObserver(t *testing.T) {
 	}
 }
 
+func TestTxPhaseObserverSeesSlowBody(t *testing.T) {
+	var body, commit atomic.Int64
+	s := openTest(t, Options{TxPhaseObserver: func(_ string, b, c time.Duration) {
+		body.Store(int64(b))
+		commit.Store(int64(c))
+	}})
+	ctx := context.Background()
+	err := s.W().Tx(ctx, func(tx *Tx) error {
+		time.Sleep(50 * time.Millisecond) // deliberately slow body: the guard must see it
+		return tx.Q.UpsertSetting(ctx, db.UpsertSettingParams{Key: "a", Value: "b", UpdatedAt: tx.NowMicros()})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if time.Duration(body.Load()) < 50*time.Millisecond || commit.Load() >= body.Load() {
+		t.Fatalf("body=%s commit=%s", time.Duration(body.Load()), time.Duration(commit.Load()))
+	}
+}
+
 func TestTxObserverAndIncrementalVacuum(t *testing.T) {
 	var calls atomic.Int32
 	s := openTest(t, Options{TxObserver: func(string, time.Duration, error) { calls.Add(1) }})
