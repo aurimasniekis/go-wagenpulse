@@ -2,6 +2,7 @@ package dictionary
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -96,5 +97,50 @@ func TestConcurrentLoadAcrossProcesses(t *testing.T) {
 	var n int
 	if err := owner.ReadDB().QueryRow(`SELECT count(*) FROM dictionary_versions`).Scan(&n); err != nil || n != 2 {
 		t.Fatalf("versions=%d err=%v", n, err)
+	}
+}
+
+// An interrupted load (error after the first batch) leaves a partial version; the next load resumes it.
+func TestInterruptedLoadIsResumed(t *testing.T) {
+	ctx := context.Background()
+	s := storetest.Open(t)
+	svc := New(s, audit.NewWriter(keyringtest.Load(t, s)))
+	docs, err := Bundled()
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := docs[0]
+	boom := errors.New("injected interruption")
+	svc.afterBatch = func(batch int) error {
+		if batch == 0 {
+			return boom
+		}
+		return nil
+	}
+	if _, _, err := svc.load(ctx, d, "bundled", audit.System); !errors.Is(err, boom) {
+		t.Fatalf("load err = %v, want injected", err)
+	}
+	var stored int
+	if err := s.ReadDB().QueryRow(`SELECT count(*) FROM dictionary_entries`).Scan(&stored); err != nil || stored != batchSize {
+		t.Fatalf("partial entries = %d (%v), want %d", stored, err, batchSize)
+	}
+
+	svc.afterBatch = nil
+	v, created, err := svc.load(ctx, d, "bundled", audit.System)
+	if err != nil || created {
+		t.Fatalf("resume: created=%v err=%v", created, err)
+	}
+	if v.EntryCount != int64(len(d.Entries)) {
+		t.Fatalf("entry_count = %d, want %d", v.EntryCount, len(d.Entries))
+	}
+	var n, sigs, versions int
+	if err := s.ReadDB().QueryRow(`SELECT count(*) FROM dictionary_entries WHERE version_id = ?`, v.ID).Scan(&n); err != nil || int64(n) != v.EntryCount {
+		t.Fatalf("stored entries = %d (%v), want %d", n, err, v.EntryCount)
+	}
+	if err := s.ReadDB().QueryRow(`SELECT count(*) FROM signals`).Scan(&sigs); err != nil || sigs != len(d.Entries) {
+		t.Fatalf("signals = %d (%v), want %d", sigs, err, len(d.Entries))
+	}
+	if err := s.ReadDB().QueryRow(`SELECT count(*) FROM dictionary_versions`).Scan(&versions); err != nil || versions != 1 {
+		t.Fatalf("versions = %d (%v)", versions, err)
 	}
 }

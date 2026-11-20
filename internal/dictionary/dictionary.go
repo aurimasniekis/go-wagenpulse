@@ -159,13 +159,17 @@ type Version struct {
 type Service struct {
 	s     *store.Store
 	audit *audit.Writer
+
+	// afterBatch, when set by tests, runs after each committed entries batch; an error aborts the load.
+	afterBatch func(batch int) error
 }
 
 // New returns a dictionary service.
 func New(s *store.Store, a *audit.Writer) *Service { return &Service{s: s, audit: a} }
 
-// batchSize bounds the entries written per transaction (ADR-0002). Each entry costs two upserts; at ~5 ms per entry under
-// -race on a loaded runner, 100 entries took 500-840 ms, so 20 keeps every transaction near 100 ms even there.
+// batchSize bounds the entries written per transaction (ADR-0002). Each entry costs two upserts. Measured with the
+// race detector on a loaded runner: about 5 ms per entry, so 100 entries took 500-840 ms; with 20 entries a batch took
+// about 100 ms typically and up to ~145 ms at worst.
 const batchSize = 20
 
 // LoadBundled loads every bundled dictionary that is not loaded yet (idempotent; called at startup).
@@ -187,52 +191,96 @@ func (svc *Service) Import(ctx context.Context, actor audit.Actor, d *Document) 
 	return svc.load(ctx, d, "imported", actor)
 }
 
-// load stores a version (unless its source hash is already loaded) and refreshes signal metadata in batches. The
-// newest document (by document date, then load order) of each kind describes a signal.
+// load stores a version and refreshes signal metadata in batches. The newest document (by document date, then load
+// order) of each kind describes a signal.
+//
+// The version row is written first (it carries entry_count) and the entries follow in short transactions, so a load
+// that is interrupted leaves a version whose stored entries are fewer than entry_count. Every load, including one that
+// finds the version already present, therefore writes whatever entries are missing before it returns: an interrupted
+// load is resumed by the next one, and no caller sees a version whose entries are still being written. Entry writes
+// are idempotent, so concurrent loaders may both fill the gap. The bool reports whether this call created the version.
 func (svc *Service) load(ctx context.Context, d *Document, origin string, actor audit.Actor) (Version, bool, error) {
-	var existing Version
-	err := svc.s.ReadDB().QueryRowContext(ctx, `SELECT id FROM dictionary_versions WHERE source_sha256 = ?`, d.SourceSHA256).Scan(&existing.ID)
-	if err == nil {
-		v, err := svc.GetVersion(ctx, existing.ID)
-		return v, false, err
-	}
-	id := ids.New(ids.Dictionary)
-	err = svc.s.W().TxNamed(ctx, "dictionary.version", func(tx *store.Tx) error {
-		// Re-check inside the write transaction: another process (a server starting while an administrative command
-		// attaches, ADR-0027) may have loaded the same document since the read above.
-		var other string
-		switch err := tx.SQL.QueryRowContext(ctx, `SELECT id FROM dictionary_versions WHERE source_sha256 = ?`, d.SourceSHA256).Scan(&other); {
-		case err == nil:
-			existing.ID = other
-			return nil
-		case !errors.Is(err, sql.ErrNoRows):
-			return err
-		}
-		if _, err := tx.SQL.ExecContext(ctx, `INSERT INTO dictionary_versions (id, kind, title, document_version, document_date, source_sha256,
-			source_file, origin, entry_count, loaded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, d.Kind, d.Title, d.DocumentVersion,
-			d.DocumentDate, d.SourceSHA256, d.SourceFile, origin, len(d.Entries), tx.NowMicros()); err != nil {
-			return err
-		}
-		_, err := svc.audit.Append(ctx, tx, audit.Event{Actor: actor, Action: "dictionary.loaded", Target: audit.Target{Type: "dictionary", ID: id},
-			Details: map[string]any{"kind": d.Kind, "document_version": d.DocumentVersion, "document_date": d.DocumentDate, "entries": len(d.Entries), "origin": origin}})
-		return err
-	})
-	if err != nil {
+	var id string
+	err := svc.s.ReadDB().QueryRowContext(ctx, `SELECT id FROM dictionary_versions WHERE source_sha256 = ?`, d.SourceSHA256).Scan(&id)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return Version{}, false, err
 	}
-	if existing.ID != "" {
-		v, err := svc.GetVersion(ctx, existing.ID)
-		return v, false, err
+	created := false
+	if id == "" {
+		newID := ids.New(ids.Dictionary)
+		err = svc.s.W().TxNamed(ctx, "dictionary.version", func(tx *store.Tx) error {
+			// Re-check inside the write transaction: another process (a server starting while an administrative command
+			// attaches, ADR-0027) may have loaded the same document since the read above.
+			switch err := tx.SQL.QueryRowContext(ctx, `SELECT id FROM dictionary_versions WHERE source_sha256 = ?`, d.SourceSHA256).Scan(&id); {
+			case err == nil:
+				return nil
+			case !errors.Is(err, sql.ErrNoRows):
+				return err
+			}
+			if _, err := tx.SQL.ExecContext(ctx, `INSERT INTO dictionary_versions (id, kind, title, document_version, document_date, source_sha256,
+				source_file, origin, entry_count, loaded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, newID, d.Kind, d.Title, d.DocumentVersion,
+				d.DocumentDate, d.SourceSHA256, d.SourceFile, origin, len(d.Entries), tx.NowMicros()); err != nil {
+				return err
+			}
+			id, created = newID, true
+			_, err := svc.audit.Append(ctx, tx, audit.Event{Actor: actor, Action: "dictionary.loaded", Target: audit.Target{Type: "dictionary", ID: id},
+				Details: map[string]any{"kind": d.Kind, "document_version": d.DocumentVersion, "document_date": d.DocumentDate, "entries": len(d.Entries), "origin": origin}})
+			return err
+		})
+		if err != nil {
+			return Version{}, false, err
+		}
 	}
-	for start := 0; start < len(d.Entries); start += batchSize {
-		end := min(start+batchSize, len(d.Entries))
-		chunk := d.Entries[start:end]
+	if err := svc.fillEntries(ctx, id, d); err != nil {
+		return Version{}, false, err
+	}
+	v, err := svc.GetVersion(ctx, id)
+	return v, created, err
+}
+
+// storedKeys returns the entry keys a version already stores.
+func (svc *Service) storedKeys(ctx context.Context, id string) (map[string]bool, error) {
+	rows, err := svc.s.ReadDB().QueryContext(ctx, `SELECT key FROM dictionary_entries WHERE version_id = ?`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	stored := map[string]bool{}
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			return nil, err
+		}
+		stored[k] = true
+	}
+	return stored, rows.Err()
+}
+
+// fillEntries writes the entries of d that the version does not store yet, in batches of batchSize.
+func (svc *Service) fillEntries(ctx context.Context, id string, d *Document) error {
+	stored, err := svc.storedKeys(ctx, id)
+	if err != nil {
+		return err
+	}
+	var missing []Entry
+	for _, e := range d.Entries {
+		if !stored[e.Key] {
+			missing = append(missing, e)
+		}
+	}
+	for start, batch := 0, 0; start < len(missing); start, batch = start+batchSize, batch+1 {
+		chunk := missing[start:min(start+batchSize, len(missing))]
 		err := svc.s.W().TxNamed(ctx, "dictionary.entries", func(tx *store.Tx) error {
 			for _, e := range chunk {
 				cj, _ := json.Marshal(nonNil(e.Clusters))
-				if _, err := tx.SQL.ExecContext(ctx, `INSERT INTO dictionary_entries (version_id, key, name, description, unit, data_type, clusters_json)
-					VALUES (?, ?, ?, ?, ?, ?, ?)`, id, e.Key, e.Name, e.Description, e.Unit, e.DataType, string(cj)); err != nil {
+				res, err := tx.SQL.ExecContext(ctx, `INSERT INTO dictionary_entries (version_id, key, name, description, unit, data_type, clusters_json)
+					VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (version_id, key) DO NOTHING`, id, e.Key, e.Name, e.Description, e.Unit, e.DataType, string(cj))
+				if err != nil {
 					return err
+				}
+				// An entry another loader stored meanwhile already refreshed its signal in the same transaction.
+				if n, _ := res.RowsAffected(); n == 0 {
+					continue
 				}
 				if err := upsertSignal(ctx, tx, id, d.Kind, d.DocumentDate, e, string(cj)); err != nil {
 					return err
@@ -241,11 +289,15 @@ func (svc *Service) load(ctx context.Context, d *Document, origin string, actor 
 			return nil
 		})
 		if err != nil {
-			return Version{}, false, err
+			return err
+		}
+		if svc.afterBatch != nil {
+			if err := svc.afterBatch(batch); err != nil {
+				return err
+			}
 		}
 	}
-	v, err := svc.GetVersion(ctx, id)
-	return v, true, err
+	return nil
 }
 
 func nonNil(s []string) []string {
