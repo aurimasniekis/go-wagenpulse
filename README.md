@@ -49,7 +49,7 @@ single sign-on and scoped API tokens, and a Terraform provider manages its confi
 ## Quick start (development)
 
 ```sh
-make build                                  # web UI + bin/wagenpulse (needs Go 1.27.3, Node 24, pnpm 10)
+make build                                  # web UI + bin/wagenpulse (needs Go 1.27.4, Node 24, pnpm 10)
 make dev                                    # development mode: http://localhost:58080, data in .wagenpulse/
 make dev-setup-token                        # in another terminal (works while the server runs)
 ```

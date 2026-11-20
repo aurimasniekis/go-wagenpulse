@@ -5,7 +5,7 @@ Read [AGENTS.md](AGENTS.md) first: its rules apply to humans and agents alike. A
 
 ## Setup
 
-- Go 1.27.3, Node 24 and pnpm 10 (`corepack enable`).
+- Go 1.27.4, Node 24 and pnpm 10 (`corepack enable`).
 - `make build` builds the UI and the binary; `make dev` runs a development instance.
 - `cd web && pnpm dev` serves the UI with hot reload, proxying the API to `make dev`.
 
