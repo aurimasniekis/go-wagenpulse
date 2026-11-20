@@ -71,12 +71,16 @@ func PasswordLogin(email, password string) func(ctx context.Context, c *Client) 
 		if err != nil {
 			return err
 		}
-		// The redirect chain ends at the portal, which sets its session cookies. Verify the session.
+		// The redirect chain ends at the portal, which sets its session cookies. Verify the session. Only a rejected
+		// session, a challenge or a rate limit count: the vehicle list's live shape is unverified (docs/CAPABILITIES.md),
+		// so any other failure of it says nothing about the sign-in, and the data calls that follow judge the session.
 		if _, err := c.Vehicles(ctx); err != nil {
-			if ClassOf(err) == ClassAuth {
+			switch ClassOf(err) {
+			case ClassAuth:
 				return &Error{Class: ClassAuth, Endpoint: "login:session", Msg: "sign-in did not establish a portal session (wrong password, pending terms or consent?)"}
+			case ClassChallenge, ClassRateLimited, "":
+				return err
 			}
-			return err
 		}
 		return nil
 	}

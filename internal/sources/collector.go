@@ -114,7 +114,7 @@ func (c *Collector) CollectNow(ctx context.Context, actor audit.Actor, id string
 	}
 	if err := c.svc.s.W().TxNamed(ctx, "sources.collect_now", func(tx *store.Tx) error {
 		if _, err := tx.SQL.ExecContext(ctx, `UPDATE source_status SET next_run_at = NULL, retry_after = NULL,
-			last_error_class = CASE WHEN last_error_class = '`+classNoVehicles+`' THEN '' ELSE last_error_class END WHERE source_id = ?`, id); err != nil {
+			last_error_class = CASE WHEN last_error_class IN ('`+classNoVehicles+`', '`+classNoRequestConfirmed+`') THEN '' ELSE last_error_class END WHERE source_id = ?`, id); err != nil {
 			return err
 		}
 		_, err := c.svc.audit.Append(ctx, tx, audit.Event{Actor: actor, Action: "source.collect_requested", Target: audit.Target{Type: "source", ID: id}})
@@ -179,8 +179,8 @@ func (c *Collector) run(ctx context.Context, j jobs.Job) error {
 func (c *Collector) logRun(ctx context.Context, src Source, attempt int, took time.Duration, out runOutcome) {
 	attrs := []any{"source_id", src.ID, "outcome", out.state, "class", out.class, "attempt", attempt,
 		"duration_ms", took.Milliseconds(), "deliveries", out.deliveries}
-	if out.class == classNoVehicles {
-		attrs[3] = classNoVehicles
+	if out.class == classNoVehicles || out.class == classNoRequestConfirmed {
+		attrs[3] = out.class
 	}
 	if out.success {
 		c.log.InfoContext(ctx, "collection run finished", attrs...)
@@ -324,13 +324,17 @@ func (c *Collector) collect(ctx context.Context, src Source) (runOutcome, *time.
 		return noRequest, nil
 	}
 	noRequest, err := pass()
-	noVehicles := false
-	if err == nil && len(types) > 0 && noRequest == len(vehs)*len(types) {
+	marker := ""
+	all := func() bool { return len(types) > 0 && noRequest == len(vehs)*len(types) }
+	if err == nil && all() {
 		// Every request answered "no active request". An expired session can look like that, so check the session
 		// before believing it, and run the pass once more on a fresh session (at most one login per run).
 		var retry bool
-		if retry, noVehicles, err = c.checkSession(ctx, src, cl); err == nil && retry {
-			noRequest, err = pass()
+		if retry, marker, err = c.checkSession(ctx, src, cl); err == nil && retry {
+			if noRequest, err = pass(); err == nil && all() {
+				// A session signed in during this run confirms it.
+				_, marker, err = c.confirmNoRequest(ctx, cl)
+			}
 		}
 	}
 	// Imports for what was stored so far happen even when the run then fails.
@@ -341,13 +345,17 @@ func (c *Collector) collect(ctx context.Context, src Source) (runOutcome, *time.
 		return out, latest
 	}
 	n := countDeliveries(stored)
-	if noVehicles {
+	if marker == classNoVehicles {
 		return runOutcome{state: "no_active_request", class: classNoVehicles, success: true, deliveries: n,
 			reason: "signed in, but the portal account lists no vehicles; link the vehicle to the account in the portal, then use Collect now"}, latest
 	}
-	if noRequest == len(vehs)*len(types) {
-		return runOutcome{state: "no_active_request", reason: "no active data request on the portal; create a continuous request in the portal (it renews about every 12 months)",
-			class: vwdataact.ClassNoRequest, success: true, deliveries: n}, latest
+	if all() {
+		class := vwdataact.ClassNoRequest
+		if marker == classNoRequestConfirmed {
+			class = marker
+		}
+		return runOutcome{state: "no_active_request", reason: "no active data request on the portal; create a continuous request on the portal (it renews about every 12 months), then use Collect now",
+			class: class, success: true, deliveries: n}, latest
 	}
 	reason := ""
 	if noRequest > 0 {
@@ -364,47 +372,92 @@ func countDeliveries(stored map[string][]ingest.StoredDelivery) int {
 	return n
 }
 
-// classNoVehicles marks a source whose trusted (fresh) portal session listed no vehicles. While it is set, the
-// collector does not sign in again to rule out an expired session; "collect now" and a credential change clear it.
-const classNoVehicles = "no_vehicles"
+// classNoVehicles marks a source whose trusted (fresh) portal session listed no vehicles, and
+// classNoRequestConfirmed one whose fresh session (signed in during the run) still reported no active request. While
+// either is set, the collector does not sign in again to rule out an expired session; "collect now" and a credential
+// change clear them.
+const (
+	classNoVehicles         = "no_vehicles"
+	classNoRequestConfirmed = "no_request_confirmed"
+)
 
-// checkSession is called when every data request answered "no active request". It asks the portal for the account's
-// vehicles: a stored session that lists none has probably expired (the data endpoints of an expired session do not
-// reliably answer 401). In password mode it signs in again (at most once per run) and reports that the pass should
-// run once more; in cookie mode a stored session cannot be renewed, so the source needs reauthorization. A session made
-// during this run, or a cookie just entered, is trusted: if it lists no vehicles, noVehicles is set.
-func (c *Collector) checkSession(ctx context.Context, src Source, cl *vwdataact.Client) (retry, noVehicles bool, err error) {
-	before := cl.Logins()
+// checkSession is called when every data request answered "no active request". An expired session can look like
+// that (the data endpoints of an expired session do not reliably answer 401), so a stored session is not believed:
+//
+//   - Password mode: sign in again (at most once per run) and report that the pass should run once more. The decision
+//     does not depend on any other endpoint. A session made during this run, or a source whose fresh session already
+//     confirmed it (marker), is trusted; then the vehicle list only refines the reason.
+//   - Cookie mode: a stored cookie cannot be renewed. The vehicle list is asked, and only real evidence (the session
+//     rejected, or a list without vehicles from a session that is not fresh) means reauthorization. A probe that fails
+//     otherwise (for example 404) is logged and the run reports "no active request".
+//
+// marker is the class to record for a trusted "no active request" (classNoVehicles, classNoRequestConfirmed or "").
+func (c *Collector) checkSession(ctx context.Context, src Source, cl *vwdataact.Client) (retry bool, marker string, err error) {
+	known := src.Status != nil && (src.Status.LastErrorClass == classNoVehicles || src.Status.LastErrorClass == classNoRequestConfirmed)
+	if cl.CanLogin() {
+		if cl.Logins() == 0 && !known {
+			c.log.InfoContext(ctx, "every data request reports no active request on a stored portal session; signing in again to rule out an expired session")
+			if err := cl.Login(ctx); err != nil {
+				return false, "", err
+			}
+			return true, "", nil
+		}
+		return c.confirmNoRequest(ctx, cl)
+	}
 	portal, err := cl.Vehicles(ctx)
 	if err != nil {
-		return false, false, err
-	}
-	if cl.Logins() > before {
-		return true, false, nil // the probe itself found the session rejected and signed in again
+		if !probeFailureIsEvidence(err) {
+			c.probeFailed(ctx, err)
+			return false, "", nil
+		}
+		return false, "", err
 	}
 	if len(portal) > 0 {
-		return false, false, nil // a working session: the account really has no active request
+		return false, "", nil // a working session: the account really has no active request
 	}
-	// Fresh: signed in during this run, or (cookie mode) the cookie was entered since the last run.
-	fresh := before > 0 || (!cl.CanLogin() && src.Status != nil && src.Status.State == "configured")
-	known := src.Status != nil && src.Status.LastErrorClass == classNoVehicles
+	// Fresh: the cookie was entered since the last run.
+	fresh := src.Status != nil && src.Status.State == "configured"
 	if fresh || known {
-		return false, true, nil
+		return false, classNoVehicles, nil
 	}
-	if !cl.CanLogin() {
-		return false, false, &vwdataact.Error{Class: vwdataact.ClassAuth, Msg: "the portal session no longer lists any vehicles; it has probably expired. Paste a fresh session cookie from your browser"}
+	return false, "", &vwdataact.Error{Class: vwdataact.ClassAuth, Msg: "the portal session no longer lists any vehicles; it has probably expired. Paste a fresh session cookie from your browser"}
+}
+
+// confirmNoRequest records a "no active request" reported by a trusted session (password mode). The vehicle list only
+// refines the reason; when the probe itself finds the stored session rejected and signs in, the pass runs once more.
+func (c *Collector) confirmNoRequest(ctx context.Context, cl *vwdataact.Client) (retry bool, marker string, err error) {
+	before := cl.Logins()
+	portal, err := cl.Vehicles(ctx)
+	switch {
+	case err != nil && probeFailureIsEvidence(err):
+		return false, "", err
+	case err != nil:
+		c.probeFailed(ctx, err)
+		return false, classNoRequestConfirmed, nil
+	case cl.Logins() > before:
+		return true, "", nil
+	case len(portal) == 0:
+		return false, classNoVehicles, nil
 	}
-	c.log.InfoContext(ctx, "the stored portal session lists no vehicles; signing in again")
-	if err := cl.Login(ctx); err != nil {
-		return false, false, err
+	return false, classNoRequestConfirmed, nil
+}
+
+// probeFailureIsEvidence reports a vehicle-list failure that says something about the session or the portal itself
+// (session rejected, bot challenge, rate limit). Anything else (an unexpected status such as 404, an outage, an
+// unparsable answer) says nothing about the session: the vehicle-list endpoint's live shape is unverified.
+func probeFailureIsEvidence(err error) bool {
+	switch vwdataact.ClassOf(err) {
+	case vwdataact.ClassAuth, vwdataact.ClassChallenge, vwdataact.ClassRateLimited:
+		return true
+	case "":
+		return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 	}
-	if portal, err = cl.Vehicles(ctx); err != nil {
-		return false, false, err
-	}
-	if len(portal) == 0 {
-		return false, true, nil
-	}
-	return true, false, nil
+	return false
+}
+
+func (c *Collector) probeFailed(ctx context.Context, err error) {
+	c.log.WarnContext(ctx, "the vehicle-list probe failed; it is not used to judge the session", "class", vwdataact.ClassOf(err),
+		"status", vwdataact.StatusOf(err), "endpoint", vwdataact.EndpointOf(err))
 }
 
 // collectOne handles one (vehicle, request type): metadata → list → download new files.

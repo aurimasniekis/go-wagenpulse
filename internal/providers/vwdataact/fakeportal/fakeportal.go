@@ -47,10 +47,16 @@ type Portal struct {
 	// The real portal's behaviour is not verified (docs/CAPABILITIES.md); these shapes keep the collector honest about
 	// all of them.
 	Expired string
-	// Fail makes an endpoint ("vehicles", "identifier", "list", "download") answer the given HTTP status.
+	// Fail makes an endpoint ("vehicles", "identifier", "list", "download") answer the given HTTP status. It applies to
+	// an authorized session and to an expired one answered as ExpiredEmpty.
 	Fail map[string]int
+	// MovedTo imitates a portal that moved hosts (2026-11-16, docs/CAPABILITIES.md E7): every API request answers 301
+	// to that base URL, under a rewritten path that answers 404 there.
+	MovedTo string
 	// Hits counts requests by path prefix.
 	Hits map[string]int
+	// Total counts every request that reached the portal, whatever its path.
+	Total int
 	// UserAgents seen.
 	UserAgents map[string]bool
 }
@@ -85,6 +91,7 @@ func (p *Portal) serve(w http.ResponseWriter, r *http.Request) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.UserAgents[r.UserAgent()] = true
+	p.Total++
 	path := r.URL.Path
 	for _, pre := range []string{"/proxy_api/consent", "/proxy_api/euda-apim/datarequest", "/proxy_api/euda-apim/datadelivery", "/oidc", "/u/login", "/login"} {
 		if strings.HasPrefix(path, pre) {
@@ -119,6 +126,10 @@ func (p *Portal) serve(w http.ResponseWriter, r *http.Request) {
 		http.SetCookie(w, &http.Cookie{Name: "PORTALSESSION", Value: p.SessionCookie, Path: "/"})
 		_, _ = fmt.Fprint(w, "ok")
 	case strings.HasPrefix(path, "/proxy_api/"):
+		if p.MovedTo != "" {
+			http.Redirect(w, r, p.MovedTo+"/en"+path, http.StatusMovedPermanently)
+			return
+		}
 		if !p.authorized(r) {
 			switch p.Expired {
 			case ExpiredRedirect:
@@ -166,6 +177,10 @@ const (
 )
 
 func (p *Portal) expiredEmpty(w http.ResponseWriter, r *http.Request) {
+	if st := p.Fail[endpointOf(r.URL.Path)]; st != 0 {
+		w.WriteHeader(st)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	if r.URL.Path == "/proxy_api/consent/me/vehicles" {
 		_, _ = fmt.Fprint(w, `{"vehicles":[]}`)
@@ -175,18 +190,23 @@ func (p *Portal) expiredEmpty(w http.ResponseWriter, r *http.Request) {
 	_, _ = fmt.Fprint(w, `{"message":"No data request found"}`)
 }
 
+// endpointOf names an API path the way Fail does.
+func endpointOf(path string) string {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	switch {
+	case path == "/proxy_api/consent/me/vehicles":
+		return "vehicles"
+	case len(parts) == 7 && parts[2] == "datarequest" && parts[5] == "metadata":
+		return "identifier"
+	case len(parts) == 7 && parts[2] == "datadelivery":
+		return parts[6]
+	}
+	return ""
+}
+
 func (p *Portal) api(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	endpoint := ""
-	switch {
-	case r.URL.Path == "/proxy_api/consent/me/vehicles":
-		endpoint = "vehicles"
-	case len(parts) == 7 && parts[2] == "datarequest" && parts[5] == "metadata":
-		endpoint = "identifier"
-	case len(parts) == 7 && parts[2] == "datadelivery":
-		endpoint = parts[6]
-	}
-	if st := p.Fail[endpoint]; st != 0 {
+	if st := p.Fail[endpointOf(r.URL.Path)]; st != 0 {
 		w.WriteHeader(st)
 		return
 	}

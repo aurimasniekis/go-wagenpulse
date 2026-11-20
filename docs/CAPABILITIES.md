@@ -4,7 +4,7 @@ This file records **what is verified** about acquiring vehicle data from the Vol
 evidence for each claim, and what remains unverified. It is the source of truth for every acquisition feature in
 WagenPulse. Update it only with evidence. Never record a VIN, an account identifier or a telemetry value here.
 
-Last reviewed: 2026-11-19.
+Last reviewed: 2026-11-20.
 
 ## Summary
 
@@ -62,7 +62,8 @@ Last reviewed: 2026-11-19.
 
 ### E3 — portal
 
-- `https://eu-data-act.drivesomethinggreater.com/…` returned HTTP 403 to automated fetches on 2026-11-02.
+- `https://eu-data-act.drivesomethinggreater.com/…` returned HTTP 403 to automated fetches on 2026-11-02. The portal has
+  since moved to `https://eu-data-act.vwgroup-datahub.com` (E7).
 - The portal is the owner-facing EU Data Act channel for VW, Audi, Škoda, SEAT, CUPRA, VW Commercial and Bentley
   (community sources; Porsche is not on the portal).
 
@@ -95,6 +96,17 @@ Last reviewed: 2026-11-19.
 - `../cupra/internal/cupra/eudataact` (same author as WagenPulse) implements the same flow plus a browser-captured
   session cookie mode.
 
+### E7 — portal host move (community clients, 2026-11-16)
+
+- HA_VAG-EU-Data-Act v0.6.54 release notes: on 16 Nov 2026 the portal moved from `eu-data-act.drivesomethinggreater.com`
+  to `eu-data-act.vwgroup-datahub.com`. The old host only redirects, so API calls returned HTTP 404 and the login
+  callback was no longer recognised. Its base URL (and with it the OIDC `redirect_uri`) now points to the new host;
+  API paths are unchanged, including `/proxy_api/consent/me/vehicles?viewPosition=FRONT_LEFT` for the vehicle list.
+- CarConnectivity connector (E5): same new base URL; it lists the old host as a legacy host, treats a 301/308 from it
+  as a move and takes over only the host, because the old host rewrites some API paths to URLs that answer 404.
+- Consistent with what WagenPulse saw (next section): from about 2026-11-16 every data request of a working source
+  read as "no active request" (v0.1.1), and v0.1.3 failed with `protocol`, HTTP 404 from `vehicles`.
+
 ### Verification performed by WagenPulse
 
 | Date | What | Result |
@@ -104,6 +116,7 @@ Last reviewed: 2026-11-19.
 | 2026-11-02 | Collector against `fakeportal` (synthetic imitation of E4–E6 behaviour) | cookie and password (Auth0 page) modes, checkpoints, `no_content`, 429/Retry-After, expired session, bot challenge refusal — **not** a live verification |
 | 2026-11-02 | Live owner test, password mode: the collector stopped with "bot challenge" before submitting credentials | **Our bug.** The check matched captcha scripts that Auth0's sign-in page always loads. The E4 client (HA_VAG-EU-Data-Act) submits the form without such a pre-check. A challenge is now detected only from a captcha the form actually demands, a challenge page served instead of the form, or a rejected submission. Retested the same day; see the next row |
 | 2026-11-02 | Live owner test after that fix (CUPRA, password mode) | **Verified by the owner:** scripted login (Auth0), authorization and collection of a continuous delivery into WagenPulse. One account, one vehicle; session lifetime not yet observed |
+| 2026-11-16 → 11-20 | Production runs after the portal's host move (E7), no identifiers recorded | v0.1.1 reported `no_active_request` for every request (the metadata 404 of the moved host read as "no request"); v0.1.3 logged `class=protocol status=404 endpoint=vehicles` and collected nothing. **Our bug:** a pinned, outdated base URL, and a 404 taken for "no request". Fixed: new base URL; a permanent redirect off the portal host is reported as a moved portal; session-expiry detection no longer depends on the vehicle list. Collection on the new host is **not yet live-verified** |
 
 ## Unresolved gaps and what would close them
 
@@ -112,8 +125,9 @@ Last reviewed: 2026-11-19.
 | Historical export structure | One real historical export archive (sanitized structure is enough) |
 | Dotted (MEB) continuous layout | One real MEB delivery |
 | Cookie mode of the unofficial collector (`session_cookie`) | An operator running the collector in cookie mode against their own account; results recorded here without identifiers |
-| How the portal answers an expired session | **Unverified.** The collector treats each of these as an expired session: HTTP 401/403, a redirect into the sign-in flow (identity provider, or the portal outside `/proxy_api/`), an HTML page from the API, and an account that suddenly lists no vehicles. An operator recording which one the portal sends (status and content type only, no bodies or identifiers) closes this |
-| Vehicle list shape (`/proxy_api/consent/me/vehicles`) | **Unverified.** The collector finds VINs under `vin` or `vehicleIdentificationNumber` anywhere in the body; one live response shape (sanitized) would confirm it |
+| How the portal answers an expired session | **Unverified.** The collector treats each of these as an expired session: HTTP 401/403, a redirect into the sign-in flow (identity provider, or the portal outside `/proxy_api/`) and an HTML page from the API. When every request reports "no active request" on a stored session, password mode signs in again once and asks again; only a fresh session's answer is believed. Cookie mode asks the vehicle list and needs reauthorization only when the session is rejected or lists no vehicles; a failing vehicle list (for example 404) is logged and not taken as evidence. An operator recording which one the portal sends (status and content type only, no bodies or identifiers) closes this |
+| Vehicle list shape (`/proxy_api/consent/me/vehicles`) | **Unverified.** The path is the one community clients use on the new host (E7); the 404 seen in production came from the old host. The collector finds VINs under `vin` or `vehicleIdentificationNumber` anywhere in the body (as E5 does). It uses the list only to name vehicles for an unbound source, to refine a "no active request" reason and, in cookie mode, as evidence of an expired session; nothing fails a run when it answers unexpectedly except the unbound-source check. One live response shape (sanitized) would confirm it |
+| Portal on the new host (`eu-data-act.vwgroup-datahub.com`, E7) | **Community-observed; not live-verified by WagenPulse.** An operator run that signs in and collects on the new host closes this |
 | Session lifetime of the portal login | An operator recording how long a session stays valid, without identifiers. Scripted login and collection in password mode are verified live once by the owner (2026-11-02) |
 | Official API | A VW-published API reference, OAuth client registration process and terms for data recipients |
 | V5.0 dictionary | The newer dictionary PDF; import it with `wagenpulse dictionary import` |

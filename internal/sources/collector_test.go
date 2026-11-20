@@ -582,3 +582,154 @@ func TestReloginFailureNamesLoginEndpoint(t *testing.T) {
 		})
 	}
 }
+
+// Regression (v0.1.3, live): every data request answered "no active request" and the vehicle-list probe that was to
+// tell an expired session apart answered 404, which failed the whole run as "protocol" and collected nothing. Detecting
+// an expired session no longer depends on that endpoint: in password mode a stored session that reports no request
+// everywhere is replaced by one fresh sign-in, and the pass runs again.
+func TestVehicles404AndExpiredSessionSignsInAgainAndCollects(t *testing.T) {
+	e := newEnv(t)
+	buf := e.captureLog()
+	now := time.Now().UTC().Truncate(time.Second)
+	e.portal.Set(func(p *fakeportal.Portal) {
+		p.Email, p.Password = "owner@example.com", "portal-password"
+		p.Requests[vin] = map[string]string{"partial": "req-1"}
+		p.Files["req-1"] = []fakeportal.File{{Name: "a.zip", CreatedOn: now.Add(-time.Hour), Data: synthetic("2026-11-01T07:00:00.000Z", "61")}}
+	})
+	user := "owner@example.com"
+	src := e.source(t, AuthPassword, "portal-password", &user)
+	if got := e.runOnce(t, src.ID); got.Status.State != "authorized" {
+		t.Fatalf("first run: %+v", got.Status)
+	}
+	// The stored session expires and is answered as an account with nothing; the vehicle list answers 404.
+	e.portal.Set(func(p *fakeportal.Portal) {
+		p.SessionCookie, p.Expired = "fresh-session", fakeportal.ExpiredEmpty
+		p.Fail = map[string]int{"vehicles": 404}
+		p.Files["req-1"] = append(p.Files["req-1"], fakeportal.File{Name: "b.zip", CreatedOn: now, Data: synthetic("2026-11-01T07:15:00.000Z", "62")})
+	})
+	logins := e.portal.Hits["/login"]
+	buf.Reset()
+	got := e.runOnce(t, src.ID)
+	if got.Status.State != "authorized" || got.Status.LastErrorClass != "" {
+		t.Fatalf("expired session with a vehicle list answering 404 reported as %+v", got.Status)
+	}
+	if n := e.portal.Hits["/login"] - logins; n != 1 {
+		t.Fatalf("signed in %d times in one run, want 1", n)
+	}
+	var stored int
+	if err := e.s.ReadDB().QueryRow(`SELECT count(*) FROM remote_files WHERE name = 'b.zip' AND outcome = 'stored'`).Scan(&stored); err != nil || stored != 1 {
+		t.Fatalf("new delivery not collected after signing in again (%d, %v)", stored, err)
+	}
+	if lines := runLines(t, buf); len(lines) != 1 || lines[0]["log.level"] != "info" || lines[0]["deliveries"] != float64(1) {
+		t.Fatalf("run log: %s", buf.String())
+	}
+}
+
+// A genuine "no active request" with a vehicle list answering 404: one fresh sign-in confirms it, the run reports
+// no_active_request (never protocol), and later runs do not sign in again until "collect now".
+func TestVehicles404AndGenuineNoRequestDoesNotLoopLogins(t *testing.T) {
+	e := newEnv(t)
+	buf := e.captureLog()
+	e.portal.Set(func(p *fakeportal.Portal) {
+		p.Email, p.Password = "owner@example.com", "portal-password"
+		p.Requests[vin] = map[string]string{"partial": "req-1"}
+	})
+	user := "owner@example.com"
+	src := e.source(t, AuthPassword, "portal-password", &user)
+	if got := e.runOnce(t, src.ID); got.Status.State != "authorized" {
+		t.Fatalf("first run: %+v", got.Status)
+	}
+	// The request ends (the account still holds the vehicle); the vehicle list answers 404.
+	e.portal.Set(func(p *fakeportal.Portal) {
+		p.Requests[vin] = map[string]string{}
+		p.Fail = map[string]int{"vehicles": 404}
+	})
+	for i, want := range []int{1, 0, 0} {
+		logins := e.portal.Hits["/login"]
+		buf.Reset()
+		got := e.runOnce(t, src.ID)
+		if got.Status.State != "no_active_request" || got.Status.LastErrorClass != "no_request_confirmed" {
+			t.Fatalf("run %d: %+v", i, got.Status)
+		}
+		if n := e.portal.Hits["/login"] - logins; n != want {
+			t.Fatalf("run %d signed in %d times, want %d", i, n, want)
+		}
+		if !probeLogged(t, buf) {
+			t.Fatalf("run %d: the failed probe is not logged with its endpoint and status: %s", i, buf.String())
+		}
+	}
+	if err := e.col.CollectNow(context.Background(), audit.System, src.ID); err != nil {
+		t.Fatal(err)
+	}
+	logins := e.portal.Hits["/login"]
+	if got := e.runOnce(t, src.ID).Status; got.State != "no_active_request" {
+		t.Fatalf("after collect now: %+v", got)
+	}
+	if n := e.portal.Hits["/login"] - logins; n != 1 {
+		t.Fatalf("after collect now signed in %d times, want 1", n)
+	}
+}
+
+// In cookie mode a vehicle list answering 404 is no evidence of an expired session: the run reports no_active_request
+// and logs the probe's endpoint and status instead of failing as protocol.
+func TestCookieVehicles404IsNotAProtocolFailure(t *testing.T) {
+	e := newEnv(t)
+	buf := e.captureLog()
+	e.portal.Set(func(p *fakeportal.Portal) { p.Requests[vin] = map[string]string{"partial": "req-1"} })
+	src := e.source(t, AuthSessionCookie, "PORTALSESSION=valid-session", nil)
+	if got := e.runOnce(t, src.ID).Status; got.State != "authorized" {
+		t.Fatalf("first run: %+v", got)
+	}
+	e.portal.Set(func(p *fakeportal.Portal) {
+		p.Requests[vin] = map[string]string{}
+		p.Fail = map[string]int{"vehicles": 404}
+	})
+	buf.Reset()
+	got := e.runOnce(t, src.ID).Status
+	if got.State != "no_active_request" || got.LastErrorClass != "no_active_request" {
+		t.Fatalf("cookie mode, vehicles 404: %+v", got)
+	}
+	if !probeLogged(t, buf) {
+		t.Fatalf("the failed probe is not logged: %s", buf.String())
+	}
+}
+
+func probeLogged(t *testing.T, buf *bytes.Buffer) bool {
+	t.Helper()
+	for _, l := range logLines(t, buf) {
+		if msg, _ := l["message"].(string); strings.HasPrefix(msg, "the vehicle-list probe failed") {
+			return l["endpoint"] == "vehicles" && l["status"] == float64(404) && l["class"] == "protocol"
+		}
+	}
+	return false
+}
+
+// Regression (live, 2026-11-16): the portal moved hosts. The old host answers API calls with a permanent redirect to
+// a rewritten path that answers 404, which read as "no active request" everywhere. A move is now a protocol failure
+// that says so; it is neither followed nor taken for "no active request", and no sign-in is attempted.
+func TestPortalMovedIsReportedNotNoRequest(t *testing.T) {
+	e := newEnv(t)
+	moved := fakeportal.New()
+	t.Cleanup(moved.Close)
+	e.portal.Set(func(p *fakeportal.Portal) {
+		p.Email, p.Password = "owner@example.com", "portal-password"
+		p.Requests[vin] = map[string]string{"partial": "req-1"}
+	})
+	user := "owner@example.com"
+	src := e.source(t, AuthPassword, "portal-password", &user)
+	if got := e.runOnce(t, src.ID); got.Status.State != "authorized" {
+		t.Fatalf("first run: %+v", got.Status)
+	}
+	e.portal.Set(func(p *fakeportal.Portal) { p.MovedTo = moved.URL() })
+	logins := e.portal.Hits["/login"]
+	got := e.runOnce(t, src.ID).Status
+	if got.State != "error" || got.LastErrorClass != "protocol" || !strings.Contains(got.Reason, "moved") || strings.Contains(got.Reason, "http") {
+		t.Fatalf("moved portal reported as %+v", got)
+	}
+	if n := e.portal.Hits["/login"] - logins; n != 0 {
+		t.Fatalf("signed in %d times on a moved portal", n)
+	}
+	if moved.Total != 0 {
+		t.Fatalf("the redirect target received %d requests; a move must not be followed", moved.Total)
+	}
+}
