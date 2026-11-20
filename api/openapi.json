@@ -2970,6 +2970,10 @@
             "format": "int64",
             "type": "integer"
           },
+          "correlation_id": {
+            "description": "Correlation ID of the last collection run; the server log lines of that run carry it.",
+            "type": "string"
+          },
           "lag_seconds": {
             "description": "Seconds since the last successful collection.",
             "format": "int64",

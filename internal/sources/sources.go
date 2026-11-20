@@ -68,6 +68,7 @@ type SourceStatus struct {
 	RetryAfter          *time.Time `json:"retry_after,omitempty"`
 	ConsecutiveFailures int64      `json:"consecutive_failures"`
 	LastErrorClass      string     `json:"last_error_class,omitempty"`
+	CorrelationID       string     `json:"correlation_id,omitempty" doc:"Correlation ID of the last collection run; the server log lines of that run carry it."`
 	LagSeconds          *int64     `json:"lag_seconds,omitempty" doc:"Seconds since the last successful collection."`
 }
 
@@ -260,8 +261,8 @@ func (svc *Service) status(ctx context.Context, id string) (*SourceStatus, error
 	var st SourceStatus
 	var attempt, success, delivery, next, retry sql.NullInt64
 	err := svc.s.ReadDB().QueryRowContext(ctx, `SELECT state, state_reason, last_attempt_at, last_success_at, last_delivery_at, next_run_at, retry_after,
-		consecutive_failures, last_error_class FROM source_status WHERE source_id = ?`, id).Scan(&st.State, &st.Reason, &attempt, &success, &delivery,
-		&next, &retry, &st.ConsecutiveFailures, &st.LastErrorClass)
+		consecutive_failures, last_error_class, last_correlation_id FROM source_status WHERE source_id = ?`, id).Scan(&st.State, &st.Reason, &attempt, &success, &delivery,
+		&next, &retry, &st.ConsecutiveFailures, &st.LastErrorClass, &st.CorrelationID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return &SourceStatus{State: "configured"}, nil
 	}

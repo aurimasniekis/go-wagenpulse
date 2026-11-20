@@ -82,13 +82,67 @@ type Error struct {
 	Status     int
 	RetryAfter time.Duration
 	Msg        string
+	// Endpoint is the short name of the call that failed (identifier, vehicles, list, download, login:<step>). It is a
+	// name, never a URL or query string.
+	Endpoint string
 }
 
 func (e *Error) Error() string {
-	if e.Status != 0 {
+	switch {
+	case e.Status != 0 && e.Endpoint != "":
+		return fmt.Sprintf("%s (HTTP %d from %s): %s", e.Class, e.Status, e.Endpoint, e.Msg)
+	case e.Status != 0:
 		return fmt.Sprintf("%s (HTTP %d): %s", e.Class, e.Status, e.Msg)
 	}
 	return e.Class + ": " + e.Msg
+}
+
+// Endpoint names used in errors and logs.
+const (
+	EndpointVehicles   = "vehicles"
+	EndpointIdentifier = "identifier"
+	EndpointList       = "list"
+	EndpointDownload   = "download"
+)
+
+// detail renders the status and endpoint for a reason, for example "404 from vehicles".
+func detail(status int, endpoint string) string {
+	switch {
+	case status != 0 && endpoint != "":
+		return fmt.Sprintf(" (%d from %s)", status, endpoint)
+	case status != 0:
+		return fmt.Sprintf(" (%d)", status)
+	case endpoint != "":
+		return " (" + endpoint + ")"
+	}
+	return ""
+}
+
+// atEndpoint names the failing call on a classified error that does not name one yet.
+func atEndpoint(err error, endpoint string) error {
+	var e *Error
+	if err != nil && errors.As(err, &e) && e.Endpoint == "" {
+		e.Endpoint = endpoint
+	}
+	return err
+}
+
+// EndpointOf returns the endpoint name carried by err ("" when none).
+func EndpointOf(err error) string {
+	var e *Error
+	if errors.As(err, &e) {
+		return e.Endpoint
+	}
+	return ""
+}
+
+// StatusOf returns the HTTP status carried by err (0 when none).
+func StatusOf(err error) int {
+	var e *Error
+	if errors.As(err, &e) {
+		return e.Status
+	}
+	return 0
 }
 
 // ClassOf returns the class of err ("" for unclassified errors).
@@ -236,7 +290,7 @@ var vinRe = regexp.MustCompile(`(?i)"(?:vin|vehicleIdentificationNumber)"\s*:\s*
 
 // Vehicles lists the VINs linked to the account (used to verify a session).
 func (c *Client) Vehicles(ctx context.Context) ([]VehicleInfo, error) {
-	body, _, err := c.get(ctx, c.cfg.BaseURL+vehiclesPath+"?viewPosition=FRONT_LEFT", nil, 4<<20)
+	body, _, err := c.get(ctx, EndpointVehicles, c.cfg.BaseURL+vehiclesPath+"?viewPosition=FRONT_LEFT", nil, 4<<20)
 	if err != nil {
 		return nil, err
 	}
@@ -257,11 +311,11 @@ var identifierRe = regexp.MustCompile(`(?i)"identifier"\s*:\s*"([^"]{1,200})"`)
 // Identifier returns the data-request identifier for a VIN and request type. ClassNoRequest means no request of that
 // type is active (it must be created by the owner in a browser).
 func (c *Client) Identifier(ctx context.Context, vin, requestType string) (string, error) {
-	body, status, err := c.get(ctx, c.cfg.BaseURL+fmt.Sprintf(metadataPath, url.PathEscape(vin), url.PathEscape(requestType)), nil, 1<<20)
+	body, status, err := c.get(ctx, EndpointIdentifier, c.cfg.BaseURL+fmt.Sprintf(metadataPath, url.PathEscape(vin), url.PathEscape(requestType)), nil, 1<<20)
 	if err != nil {
 		var e *Error
 		if errors.As(err, &e) && e.Class == ClassProtocol && (e.Status == http.StatusNotFound || e.Status == http.StatusBadRequest) {
-			return "", &Error{Class: ClassNoRequest, Status: e.Status, Msg: "no active data request of this type on the portal"}
+			return "", &Error{Class: ClassNoRequest, Status: e.Status, Endpoint: EndpointIdentifier, Msg: "no active data request of this type on the portal"}
 		}
 		return "", err
 	}
@@ -290,7 +344,7 @@ type rawFile struct {
 
 // List returns delivered files, newest first. An empty result means nothing was delivered yet.
 func (c *Client) List(ctx context.Context, vin, identifier, requestType string) ([]File, error) {
-	body, status, err := c.get(ctx, c.cfg.BaseURL+fmt.Sprintf(listPath, url.PathEscape(vin), url.PathEscape(identifier)),
+	body, status, err := c.get(ctx, EndpointList, c.cfg.BaseURL+fmt.Sprintf(listPath, url.PathEscape(vin), url.PathEscape(identifier)),
 		map[string]string{"type": requestType}, 4<<20)
 	if err != nil {
 		var e *Error
@@ -308,7 +362,7 @@ func (c *Client) List(ctx context.Context, vin, identifier, requestType string) 
 			Files []rawFile `json:"files"`
 		}
 		if err2 := json.Unmarshal(body, &wrapped); err2 != nil {
-			return nil, &Error{Class: ClassProtocol, Msg: "the file list has an unexpected structure"}
+			return nil, &Error{Class: ClassProtocol, Endpoint: EndpointList, Msg: "the file list has an unexpected structure"}
 		}
 		raws = wrapped.Files
 	}
@@ -353,17 +407,22 @@ func parseTime(raw json.RawMessage) *time.Time {
 
 // Download returns one delivered file (bounded by MaxDownload).
 func (c *Client) Download(ctx context.Context, vin, identifier, requestType, name string) ([]byte, error) {
-	body, _, err := c.get(ctx, c.cfg.BaseURL+fmt.Sprintf(downloadPath, url.PathEscape(vin), url.PathEscape(identifier)),
+	body, _, err := c.get(ctx, EndpointDownload, c.cfg.BaseURL+fmt.Sprintf(downloadPath, url.PathEscape(vin), url.PathEscape(identifier)),
 		map[string]string{"filename": name, "type": requestType}, c.cfg.MaxDownload)
 	return body, err
 }
 
-// get issues a GET, signing in again once (per client) when the session is rejected or has expired.
+// get issues a GET to the named endpoint, signing in again once (per client) when the session is rejected or has expired.
 //
 // An expired portal session does not always answer 401/403: the request can be redirected into the sign-in flow,
 // which ends in an HTML page with status 200. Such an answer to a data endpoint is treated as an expired session,
 // never as data or as "no active request".
-func (c *Client) get(ctx context.Context, rawURL string, headers map[string]string, limit int64) ([]byte, int, error) {
+func (c *Client) get(ctx context.Context, endpoint, rawURL string, headers map[string]string, limit int64) ([]byte, int, error) {
+	body, status, err := c.getOnce(ctx, endpoint, rawURL, headers, limit)
+	return body, status, atEndpoint(err, endpoint)
+}
+
+func (c *Client) getOnce(ctx context.Context, endpoint, rawURL string, headers map[string]string, limit int64) ([]byte, int, error) {
 	resp, err := c.do(ctx, rawURL, headers, limit)
 	if err != nil {
 		return nil, 0, err
@@ -379,7 +438,7 @@ func (c *Client) get(ctx context.Context, rawURL string, headers map[string]stri
 	if c.sessionRejected(resp) {
 		return nil, resp.status, &Error{Class: ClassAuth, Status: resp.status, Msg: "the portal rejected the session; reauthorize the source"}
 	}
-	return resp.body, resp.status, classify(resp.status, resp.body)
+	return resp.body, resp.status, classify(resp.status, endpoint)
 }
 
 // response is what do returns: the body and where the request ended after redirects.
@@ -415,18 +474,18 @@ func (c *Client) sessionRejected(r response) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(r.contentType)), "text/html")
 }
 
-func classify(status int, _ []byte) error {
+func classify(status int, endpoint string) error {
 	switch {
 	case status < 400:
 		return nil
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
-		return &Error{Class: ClassAuth, Status: status, Msg: "the portal rejected the session; reauthorize the source"}
+		return &Error{Class: ClassAuth, Status: status, Endpoint: endpoint, Msg: "the portal rejected the session; reauthorize the source"}
 	case status == http.StatusTooManyRequests:
-		return &Error{Class: ClassRateLimited, Status: status, Msg: "the portal is rate limiting requests"}
+		return &Error{Class: ClassRateLimited, Status: status, Endpoint: endpoint, Msg: "the portal is rate limiting requests"}
 	case status >= 500:
-		return &Error{Class: ClassUnavailable, Status: status, Msg: "the portal is unavailable"}
+		return &Error{Class: ClassUnavailable, Status: status, Endpoint: endpoint, Msg: "the portal is unavailable" + detail(status, endpoint)}
 	default:
-		return &Error{Class: ClassProtocol, Status: status, Msg: "the portal returned an unexpected status"}
+		return &Error{Class: ClassProtocol, Status: status, Endpoint: endpoint, Msg: "the portal returned an unexpected status" + detail(status, endpoint)}
 	}
 }
 

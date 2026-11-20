@@ -15,6 +15,7 @@ import (
 	"github.com/aurimasniekis/go-wagenpulse/internal/apperr"
 	"github.com/aurimasniekis/go-wagenpulse/internal/audit"
 	"github.com/aurimasniekis/go-wagenpulse/internal/buildinfo"
+	"github.com/aurimasniekis/go-wagenpulse/internal/ids"
 	"github.com/aurimasniekis/go-wagenpulse/internal/ingest"
 	"github.com/aurimasniekis/go-wagenpulse/internal/jobs"
 	"github.com/aurimasniekis/go-wagenpulse/internal/obs"
@@ -130,6 +131,11 @@ type runOutcome struct {
 	class      string
 	retryAfter time.Duration
 	success    bool
+	// Diagnostics for the run log; never shown as a reason and never carrying secrets.
+	status      int    // HTTP status of the failing call (0 = none)
+	endpoint    string // name of the failing call
+	deliveries  int    // deliveries downloaded and stored by this run
+	internalErr error  // a non-portal failure; logged, not shown
 }
 
 // run performs one collection for a source. Network I/O never happens inside a write transaction.
@@ -151,13 +157,41 @@ func (c *Collector) run(ctx context.Context, j jobs.Job) error {
 	if !src.Enabled {
 		return nil
 	}
-	started := c.svc.now()
+	// The correlation ID is shown on the source (status.correlation_id) and carried by every log line of the run.
+	if obs.ID(ctx, obs.FieldCorrelationID) == "" {
+		ctx = obs.WithID(ctx, obs.FieldCorrelationID, ids.New(ids.Correlation))
+	}
+	started, wall := c.svc.now(), time.Now()
 	out, latest := c.collect(ctx, src)
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
 	c.opts.Metrics.CollectRun(src.Kind, out.state)
-	return c.record(ctx, src, started, out, latest)
+	if err := c.record(ctx, src, started, out, latest); err != nil {
+		return err
+	}
+	c.logRun(ctx, src, j.Attempt, time.Since(wall), out)
+	return nil
+}
+
+// logRun logs the outcome of one run: info when it succeeded, warn (or error for an internal failure) when it did not.
+// Fields are identifiers, classes, endpoint names and counts only: no cookies, credentials, VINs or URLs.
+func (c *Collector) logRun(ctx context.Context, src Source, attempt int, took time.Duration, out runOutcome) {
+	attrs := []any{"source_id", src.ID, "outcome", out.state, "class", out.class, "attempt", attempt,
+		"duration_ms", took.Milliseconds(), "deliveries", out.deliveries}
+	if out.class == classNoVehicles {
+		attrs[3] = classNoVehicles
+	}
+	if out.success {
+		c.log.InfoContext(ctx, "collection run finished", attrs...)
+		return
+	}
+	attrs = append(attrs, "status", out.status, "endpoint", out.endpoint)
+	if out.internalErr != nil {
+		c.log.ErrorContext(ctx, "collection run failed", append(attrs, obs.Err(out.internalErr))...)
+		return
+	}
+	c.log.WarnContext(ctx, "collection run failed", attrs...)
 }
 
 func (c *Collector) client(ctx context.Context, src Source) (*vwdataact.Client, error) {
@@ -235,7 +269,7 @@ func (c *Collector) collect(ctx context.Context, src Source) (runOutcome, *time.
 	rows, err := c.svc.s.ReadDB().QueryContext(ctx, `SELECT v.num, v.id, v.vin, v.slug FROM source_vehicles sv JOIN vehicles v ON v.num = sv.vehicle_num
 		WHERE sv.source_id = ? AND v.archived_at IS NULL ORDER BY v.id`, src.ID)
 	if err != nil {
-		return runOutcome{state: "error", reason: "database error", class: "internal"}, nil
+		return runOutcome{state: "error", reason: "database error; see server logs", class: "internal", internalErr: err}, nil
 	}
 	var vehs []vehicleRef
 	if err := func() error {
@@ -249,7 +283,7 @@ func (c *Collector) collect(ctx context.Context, src Source) (runOutcome, *time.
 		}
 		return rows.Err()
 	}(); err != nil {
-		return runOutcome{state: "error", class: "internal"}, nil
+		return runOutcome{state: "error", reason: "database error; see server logs", class: "internal", internalErr: err}, nil
 	}
 	if len(vehs) == 0 {
 		// Verify the session even without vehicles so the operator sees whether it works, and say which vehicles to
@@ -302,21 +336,32 @@ func (c *Collector) collect(ctx context.Context, src Source) (runOutcome, *time.
 	// Imports for what was stored so far happen even when the run then fails.
 	c.createImports(ctx, src, stored)
 	if err != nil {
-		return outcomeFor(err), latest
+		out := outcomeFor(err)
+		out.deliveries = countDeliveries(stored)
+		return out, latest
 	}
+	n := countDeliveries(stored)
 	if noVehicles {
-		return runOutcome{state: "no_active_request", class: classNoVehicles, success: true,
+		return runOutcome{state: "no_active_request", class: classNoVehicles, success: true, deliveries: n,
 			reason: "signed in, but the portal account lists no vehicles; link the vehicle to the account in the portal, then use Collect now"}, latest
 	}
 	if noRequest == len(vehs)*len(types) {
 		return runOutcome{state: "no_active_request", reason: "no active data request on the portal; create a continuous request in the portal (it renews about every 12 months)",
-			class: vwdataact.ClassNoRequest, success: true}, latest
+			class: vwdataact.ClassNoRequest, success: true, deliveries: n}, latest
 	}
 	reason := ""
 	if noRequest > 0 {
 		reason = "some vehicles have no active data request on the portal"
 	}
-	return runOutcome{state: "authorized", reason: reason, success: true}, latest
+	return runOutcome{state: "authorized", reason: reason, success: true, deliveries: n}, latest
+}
+
+func countDeliveries(stored map[string][]ingest.StoredDelivery) int {
+	n := 0
+	for _, ds := range stored {
+		n += len(ds)
+	}
+	return n
 }
 
 // classNoVehicles marks a source whose trusted (fresh) portal session listed no vehicles. While it is set, the
@@ -476,8 +521,14 @@ func (c *Collector) saveSession(ctx context.Context, id, cookies string) {
 func outcomeFor(err error) runOutcome {
 	var e *vwdataact.Error
 	if !errors.As(err, &e) {
-		return runOutcome{state: "error", reason: "collection failed; see server logs", class: "internal"}
+		return runOutcome{state: "error", reason: "collection failed; see server logs", class: "internal", internalErr: err}
 	}
+	out := outcomeForClass(e)
+	out.status, out.endpoint = e.Status, e.Endpoint
+	return out
+}
+
+func outcomeForClass(e *vwdataact.Error) runOutcome {
 	switch e.Class {
 	case vwdataact.ClassAuth, vwdataact.ClassChallenge:
 		return runOutcome{state: "reauthorization_required", reason: e.Msg, class: e.Class}
@@ -551,13 +602,14 @@ func (c *Collector) record(ctx context.Context, src Source, started time.Time, o
 			delivery = latest.UnixMicro()
 		}
 		if _, err := tx.SQL.ExecContext(ctx, `INSERT INTO source_status (source_id, state, state_reason, last_attempt_at, last_success_at, last_delivery_at,
-			next_run_at, retry_after, consecutive_failures, last_error_class, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			next_run_at, retry_after, consecutive_failures, last_error_class, last_correlation_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT (source_id) DO UPDATE SET state = excluded.state, state_reason = excluded.state_reason, last_attempt_at = excluded.last_attempt_at,
 			  last_success_at = coalesce(excluded.last_success_at, source_status.last_success_at),
 			  last_delivery_at = coalesce(excluded.last_delivery_at, source_status.last_delivery_at), next_run_at = excluded.next_run_at,
 			  retry_after = excluded.retry_after, consecutive_failures = excluded.consecutive_failures, last_error_class = excluded.last_error_class,
+			  last_correlation_id = excluded.last_correlation_id,
 			  updated_at = excluded.updated_at`,
-			src.ID, out.state, out.reason, started.UnixMicro(), success, delivery, next.UnixMicro(), retry, failures, out.class, tx.NowMicros()); err != nil {
+			src.ID, out.state, out.reason, started.UnixMicro(), success, delivery, next.UnixMicro(), retry, failures, out.class, obs.ID(ctx, obs.FieldCorrelationID), tx.NowMicros()); err != nil {
 			return err
 		}
 		if out.state == "reauthorization_required" {

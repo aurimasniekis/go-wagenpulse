@@ -179,6 +179,11 @@ function SourceDetail() {
               Reason: <Code>{st.reason}</Code>
             </Text>
           ) : null}
+          {st?.correlation_id ? (
+            <Text size="sm" mt={6}>
+              Correlation ID: <Code>{st.correlation_id}</Code>
+            </Text>
+          ) : null}
           {st?.retry_after ? (
             <Text size="sm" mt={6}>
               Retry after <Time value={st.retry_after} />
