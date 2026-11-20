@@ -4,7 +4,7 @@ Status as of 2026-11-02. Nothing has been pushed, tagged, released or published.
 
 ## Delivered
 
-**Application** (`go-wagenpulse`, Go 1.27.3 with an embedded React/TypeScript UI):
+**Application** (`go-wagenpulse`, Go 1.27.4 with an embedded React/TypeScript UI):
 
 - **Import**
   - Content-addressed raw storage and safe ZIP/JSON extraction (size, entry, ratio, traversal, symlink and nesting
