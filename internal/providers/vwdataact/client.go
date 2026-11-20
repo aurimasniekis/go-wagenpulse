@@ -266,9 +266,10 @@ func (c *Client) Login(ctx context.Context) error {
 	c.logins++
 	c.mu.Unlock()
 	if n > 0 {
-		return &Error{Class: ClassAuth, Msg: "the portal rejected the session again right after signing in; reauthorize the source"}
+		return &Error{Class: ClassAuth, Endpoint: "login:session", Msg: "the portal rejected the session again right after signing in; reauthorize the source"}
 	}
-	return c.login(ctx)
+	// A sign-in failure is never a failure of the data endpoint that happened to trigger it.
+	return atEndpoint(c.login(ctx), "login")
 }
 
 // Logins returns how many logins this client attempted (0 = it is still using a stored session).
@@ -495,7 +496,8 @@ func (c *Client) do(ctx context.Context, rawURL string, headers map[string]strin
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return response{}, err
+		// The parse error quotes the URL, which can carry a VIN: never pass it on.
+		return response{}, &Error{Class: ClassProtocol, Msg: "the portal request could not be built"}
 	}
 	req.Header.Set("Accept", "application/json, application/zip, */*")
 	req.Header.Set("User-Agent", c.cfg.UserAgent)

@@ -47,7 +47,7 @@ type Portal struct {
 	// The real portal's behaviour is not verified (docs/CAPABILITIES.md); these shapes keep the collector honest about
 	// all of them.
 	Expired string
-	// Fail makes an endpoint ("vehicles", "metadata", "list", "download") answer the given HTTP status.
+	// Fail makes an endpoint ("vehicles", "identifier", "list", "download") answer the given HTTP status.
 	Fail map[string]int
 	// Hits counts requests by path prefix.
 	Hits map[string]int
@@ -182,7 +182,7 @@ func (p *Portal) api(w http.ResponseWriter, r *http.Request) {
 	case r.URL.Path == "/proxy_api/consent/me/vehicles":
 		endpoint = "vehicles"
 	case len(parts) == 7 && parts[2] == "datarequest" && parts[5] == "metadata":
-		endpoint = "metadata"
+		endpoint = "identifier"
 	case len(parts) == 7 && parts[2] == "datadelivery":
 		endpoint = parts[6]
 	}

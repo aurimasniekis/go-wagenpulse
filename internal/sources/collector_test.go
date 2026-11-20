@@ -539,3 +539,46 @@ func TestSuccessfulRunLogsOneInfoLine(t *testing.T) {
 		}
 	}
 }
+
+// A sign-in that fails while a data call re-runs it is reported as a sign-in failure, never as the data endpoint
+// that happened to trigger it.
+func TestReloginFailureNamesLoginEndpoint(t *testing.T) {
+	for name, tc := range map[string]struct {
+		set  func(p *fakeportal.Portal)
+		want string
+	}{
+		"challenge page": {func(p *fakeportal.Portal) { p.Interstitial = true }, "login:authorize"},
+		"captcha":        {func(p *fakeportal.Portal) { p.Captcha = true }, "login:"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t)
+			buf := e.captureLog()
+			e.portal.Set(func(p *fakeportal.Portal) {
+				p.Email, p.Password = "owner@example.com", "portal-password"
+				p.Requests[vin] = map[string]string{"partial": "req-1"}
+			})
+			user := "owner@example.com"
+			src := e.source(t, AuthPassword, "portal-password", &user)
+			if got := e.runOnce(t, src.ID); got.Status.State != "authorized" {
+				t.Fatalf("first run: %+v", got.Status)
+			}
+			e.portal.Set(func(p *fakeportal.Portal) {
+				p.SessionCookie, p.Expired = "fresh-session", fakeportal.ExpiredRedirect
+				tc.set(p)
+			})
+			buf.Reset()
+			got := e.runOnce(t, src.ID)
+			if got.Status.State != "reauthorization_required" {
+				t.Fatalf("state: %+v", got.Status)
+			}
+			lines := runLines(t, buf)
+			if len(lines) != 1 {
+				t.Fatalf("want one run line: %s", buf.String())
+			}
+			ep, _ := lines[0]["endpoint"].(string)
+			if !strings.HasPrefix(ep, tc.want) || strings.Contains(got.Status.Reason, "vehicles") {
+				t.Fatalf("endpoint %q, reason %q: want %s*, not vehicles", ep, got.Status.Reason, tc.want)
+			}
+		})
+	}
+}

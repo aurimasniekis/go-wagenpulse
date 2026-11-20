@@ -64,7 +64,7 @@ func PasswordLogin(email, password string) func(ctx context.Context, c *Client) 
 		case strings.Contains(finalURL, "/signin-service/"):
 			err = c.classicLogin(ctx, page, finalURL, email, password)
 		case challenged(page):
-			return &Error{Class: ClassChallenge, Msg: "the identity provider presented a bot challenge; sign in with a browser and use a session cookie"}
+			return &Error{Class: ClassChallenge, Endpoint: "login:authorize", Msg: "the identity provider presented a bot challenge; sign in with a browser and use a session cookie"}
 		default:
 			return &Error{Class: ClassProtocol, Endpoint: "login:authorize", Msg: "the identity provider served an unknown sign-in page"}
 		}
@@ -74,7 +74,7 @@ func PasswordLogin(email, password string) func(ctx context.Context, c *Client) 
 		// The redirect chain ends at the portal, which sets its session cookies. Verify the session.
 		if _, err := c.Vehicles(ctx); err != nil {
 			if ClassOf(err) == ClassAuth {
-				return &Error{Class: ClassAuth, Msg: "sign-in did not establish a portal session (wrong password, pending terms or consent?)"}
+				return &Error{Class: ClassAuth, Endpoint: "login:session", Msg: "sign-in did not establish a portal session (wrong password, pending terms or consent?)"}
 			}
 			return err
 		}
@@ -233,7 +233,8 @@ func (c *Client) fetch(ctx context.Context, method, rawURL string, form url.Valu
 	}
 	req, err := http.NewRequestWithContext(ctx, method, rawURL, body)
 	if err != nil {
-		return "", "", 0, err
+		// The parse error quotes the URL, which can carry a state or nonce: never pass it on.
+		return "", "", 0, &Error{Class: ClassProtocol, Msg: "the sign-in request could not be built"}
 	}
 	req.Header.Set("User-Agent", c.cfg.UserAgent)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml")
