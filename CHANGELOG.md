@@ -5,6 +5,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Portal failures are now diagnosable. The reason of a failed call names the HTTP status and the endpoint (for example
+  "the portal returned an unexpected status (404 from vehicles)"; endpoints are `vehicles`, `identifier`, `list`,
+  `download` and `login:<step>`, never URLs). Every collection run that ends in failure is logged at warn (error for an
+  internal failure) with the source ID, correlation ID, error class, status, endpoint, attempt and duration, and every
+  run logs one info line with its outcome and the number of deliveries. The correlation ID is also shown on the source
+  page (`status.correlation_id`), so the UI's reference matches the log. Nothing secret, no VIN and no URL is logged.
+
 ## [0.1.2] - 2026-11-20
 
 ### Fixed

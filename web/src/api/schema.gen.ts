@@ -2335,6 +2335,8 @@ export interface components {
         SourceStatus: {
             /** Format: int64 */
             consecutive_failures: number;
+            /** @description Correlation ID of the last collection run; the server log lines of that run carry it. */
+            correlation_id?: string;
             /**
              * Format: int64
              * @description Seconds since the last successful collection.

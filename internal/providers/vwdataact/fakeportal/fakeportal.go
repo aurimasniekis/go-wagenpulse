@@ -47,6 +47,8 @@ type Portal struct {
 	// The real portal's behaviour is not verified (docs/CAPABILITIES.md); these shapes keep the collector honest about
 	// all of them.
 	Expired string
+	// Fail makes an endpoint ("vehicles", "identifier", "list", "download") answer the given HTTP status.
+	Fail map[string]int
 	// Hits counts requests by path prefix.
 	Hits map[string]int
 	// UserAgents seen.
@@ -175,6 +177,19 @@ func (p *Portal) expiredEmpty(w http.ResponseWriter, r *http.Request) {
 
 func (p *Portal) api(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	endpoint := ""
+	switch {
+	case r.URL.Path == "/proxy_api/consent/me/vehicles":
+		endpoint = "vehicles"
+	case len(parts) == 7 && parts[2] == "datarequest" && parts[5] == "metadata":
+		endpoint = "identifier"
+	case len(parts) == 7 && parts[2] == "datadelivery":
+		endpoint = parts[6]
+	}
+	if st := p.Fail[endpoint]; st != 0 {
+		w.WriteHeader(st)
+		return
+	}
 	switch {
 	case r.URL.Path == "/proxy_api/consent/me/vehicles":
 		var vins []string

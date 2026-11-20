@@ -541,6 +541,7 @@ type SourceStatus struct {
 	ConsecutiveFailures int64
 	LastErrorClass      string
 	UpdatedAt           int64
+	LastCorrelationID   string
 }
 
 type SourceVehicle struct {

@@ -14,6 +14,7 @@ import (
 	"github.com/aurimasniekis/go-wagenpulse/internal/ingest"
 	"github.com/aurimasniekis/go-wagenpulse/internal/jobs"
 	"github.com/aurimasniekis/go-wagenpulse/internal/keyring/keyringtest"
+	"github.com/aurimasniekis/go-wagenpulse/internal/obs"
 	"github.com/aurimasniekis/go-wagenpulse/internal/providers/vwdataact/fakeportal"
 	"github.com/aurimasniekis/go-wagenpulse/internal/secretref"
 	"github.com/aurimasniekis/go-wagenpulse/internal/settings"
@@ -400,5 +401,184 @@ func TestPersistentNoRequestIsSurfaced(t *testing.T) {
 	e.portal.Set(func(p *fakeportal.Portal) { p.Requests[vin] = map[string]string{"partial": "req-1"} })
 	if got := e.runOnce(t, src.ID).Status; got.State != "authorized" || got.ConsecutiveFailures != 0 {
 		t.Fatalf("after a request appeared: %+v", got)
+	}
+}
+
+// logEnv routes the collector's log into a buffer (JSON, as in production).
+func (e *env) captureLog() *bytes.Buffer {
+	var buf bytes.Buffer
+	l, _ := obs.NewLogger(&buf, "debug", "json")
+	e.col.log = obs.Component(l, "collector")
+	return &buf
+}
+
+func logLines(t *testing.T, buf *bytes.Buffer) []map[string]any {
+	t.Helper()
+	var out []map[string]any
+	for _, ln := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if ln == "" {
+			continue
+		}
+		m := map[string]any{}
+		if err := json.Unmarshal([]byte(ln), &m); err != nil {
+			t.Fatalf("log line %q: %v", ln, err)
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+func runLines(t *testing.T, buf *bytes.Buffer) []map[string]any {
+	t.Helper()
+	var out []map[string]any
+	for _, m := range logLines(t, buf) {
+		if msg, _ := m["message"].(string); strings.HasPrefix(msg, "collection run ") {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func TestFailureReasonNamesStatusAndEndpoint(t *testing.T) {
+	// vehicles: a source without bound vehicles only probes the vehicle list.
+	e := newEnv(t)
+	e.portal.Set(func(p *fakeportal.Portal) { p.Fail = map[string]int{"vehicles": 404} })
+	secret := "PORTALSESSION=valid-session"
+	src, err := e.svc.Create(context.Background(), audit.System, Input{Name: "Portal", Enabled: true, Brand: "cupra", Country: "de", Language: "en",
+		AuthMode: AuthSessionCookie, Secret: &secret, CollectContinuous: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := e.runOnce(t, src.ID)
+	if got.Status.State != "error" || !strings.Contains(got.Status.Reason, "unexpected status (404 from vehicles)") {
+		t.Fatalf("vehicles: %+v", got.Status)
+	}
+
+	// download: a listed file that cannot be downloaded.
+	e = newEnv(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	e.portal.Set(func(p *fakeportal.Portal) {
+		p.Requests[vin] = map[string]string{"partial": "req-1"}
+		p.Files["req-1"] = []fakeportal.File{{Name: "20261101061500_" + vin + ".zip", CreatedOn: now, Data: synthetic("2026-11-01T06:00:00.000Z", "60")}}
+		p.Fail = map[string]int{"download": 404}
+	})
+	src = e.source(t, AuthSessionCookie, "PORTALSESSION=valid-session", nil)
+	got = e.runOnce(t, src.ID)
+	if got.Status.State != "error" || !strings.Contains(got.Status.Reason, "unexpected status (404 from download)") {
+		t.Fatalf("download: %+v", got.Status)
+	}
+	if strings.Contains(got.Status.Reason, vin) || strings.Contains(got.Status.Reason, "http") {
+		t.Fatalf("reason leaks a URL or VIN: %q", got.Status.Reason)
+	}
+}
+
+func TestFailedRunIsLoggedWithCorrelationID(t *testing.T) {
+	e := newEnv(t)
+	buf := e.captureLog()
+	now := time.Now().UTC().Truncate(time.Second)
+	e.portal.Set(func(p *fakeportal.Portal) {
+		p.Requests[vin] = map[string]string{"partial": "req-1"}
+		p.Files["req-1"] = []fakeportal.File{{Name: "20261101061500_" + vin + ".zip", CreatedOn: now, Data: synthetic("2026-11-01T06:00:00.000Z", "60")}}
+		p.Fail = map[string]int{"download": 404}
+	})
+	const cookie = "PORTALSESSION=valid-session"
+	src := e.source(t, AuthSessionCookie, cookie, nil)
+	got := e.runOnce(t, src.ID)
+	lines := runLines(t, buf)
+	if len(lines) != 1 {
+		t.Fatalf("want one run line, got %d: %s", len(lines), buf.String())
+	}
+	l := lines[0]
+	if l["log.level"] != "warn" {
+		t.Fatalf("level: %v", l)
+	}
+	cid, _ := l["wagenpulse.correlation_id"].(string)
+	if cid == "" || cid != got.Status.CorrelationID {
+		t.Fatalf("log correlation %q, source API %q", cid, got.Status.CorrelationID)
+	}
+	if l["source_id"] != src.ID {
+		t.Fatalf("source id missing: %v", l)
+	}
+	if l["class"] != "protocol" || l["endpoint"] != "download" || l["status"] != float64(404) || l["attempt"] != float64(1) {
+		t.Fatalf("fields: %v", l)
+	}
+	if _, ok := l["duration_ms"]; !ok {
+		t.Fatalf("duration missing: %v", l)
+	}
+	for _, secret := range []string{vin, "valid-session", "PORTALSESSION", "http://", "https://"} {
+		if strings.Contains(buf.String(), secret) {
+			t.Fatalf("log contains %q: %s", secret, buf.String())
+		}
+	}
+}
+
+func TestSuccessfulRunLogsOneInfoLine(t *testing.T) {
+	e := newEnv(t)
+	buf := e.captureLog()
+	now := time.Now().UTC().Truncate(time.Second)
+	e.portal.Set(func(p *fakeportal.Portal) {
+		p.Requests[vin] = map[string]string{"partial": "req-1"}
+		p.Files["req-1"] = []fakeportal.File{{Name: "20261101061500_" + vin + ".zip", CreatedOn: now, Data: synthetic("2026-11-01T06:00:00.000Z", "60")}}
+	})
+	src := e.source(t, AuthSessionCookie, "PORTALSESSION=valid-session", nil)
+	got := e.runOnce(t, src.ID)
+	lines := runLines(t, buf)
+	if len(lines) != 1 {
+		t.Fatalf("want one run line, got %d: %s", len(lines), buf.String())
+	}
+	l := lines[0]
+	if l["log.level"] != "info" {
+		t.Fatalf("level: %v", l)
+	}
+	if l["outcome"] != "authorized" || l["deliveries"] != float64(1) || l["wagenpulse.correlation_id"] != got.Status.CorrelationID || got.Status.CorrelationID == "" {
+		t.Fatalf("fields: %v (status %+v)", l, got.Status)
+	}
+	for _, secret := range []string{vin, "valid-session", "PORTALSESSION"} {
+		if strings.Contains(buf.String(), secret) {
+			t.Fatalf("log contains %q: %s", secret, buf.String())
+		}
+	}
+}
+
+// A sign-in that fails while a data call re-runs it is reported as a sign-in failure, never as the data endpoint
+// that happened to trigger it.
+func TestReloginFailureNamesLoginEndpoint(t *testing.T) {
+	for name, tc := range map[string]struct {
+		set  func(p *fakeportal.Portal)
+		want string
+	}{
+		"challenge page": {func(p *fakeportal.Portal) { p.Interstitial = true }, "login:authorize"},
+		"captcha":        {func(p *fakeportal.Portal) { p.Captcha = true }, "login:"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t)
+			buf := e.captureLog()
+			e.portal.Set(func(p *fakeportal.Portal) {
+				p.Email, p.Password = "owner@example.com", "portal-password"
+				p.Requests[vin] = map[string]string{"partial": "req-1"}
+			})
+			user := "owner@example.com"
+			src := e.source(t, AuthPassword, "portal-password", &user)
+			if got := e.runOnce(t, src.ID); got.Status.State != "authorized" {
+				t.Fatalf("first run: %+v", got.Status)
+			}
+			e.portal.Set(func(p *fakeportal.Portal) {
+				p.SessionCookie, p.Expired = "fresh-session", fakeportal.ExpiredRedirect
+				tc.set(p)
+			})
+			buf.Reset()
+			got := e.runOnce(t, src.ID)
+			if got.Status.State != "reauthorization_required" {
+				t.Fatalf("state: %+v", got.Status)
+			}
+			lines := runLines(t, buf)
+			if len(lines) != 1 {
+				t.Fatalf("want one run line: %s", buf.String())
+			}
+			ep, _ := lines[0]["endpoint"].(string)
+			if !strings.HasPrefix(ep, tc.want) || strings.Contains(got.Status.Reason, "vehicles") {
+				t.Fatalf("endpoint %q, reason %q: want %s*, not vehicles", ep, got.Status.Reason, tc.want)
+			}
+		})
 	}
 }

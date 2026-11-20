@@ -51,10 +51,10 @@ func PasswordLogin(email, password string) func(ctx context.Context, c *Client) 
 		}
 		page, finalURL, status, err := c.fetch(ctx, http.MethodGet, authorize, nil, c.cfg.BaseURL+"/")
 		if err != nil {
-			return err
+			return atEndpoint(err, "login:authorize")
 		}
 		if status >= 400 {
-			return &Error{Class: ClassUnavailable, Status: status, Msg: "the identity provider did not serve a sign-in page"}
+			return &Error{Class: ClassUnavailable, Status: status, Endpoint: "login:authorize", Msg: "the identity provider did not serve a sign-in page"}
 		}
 		// Submit the form as the browser would. Whether a captcha is required is decided by the identity provider's
 		// answer (or a challenge page instead of the form), never by strings that the sign-in page always contains.
@@ -64,9 +64,9 @@ func PasswordLogin(email, password string) func(ctx context.Context, c *Client) 
 		case strings.Contains(finalURL, "/signin-service/"):
 			err = c.classicLogin(ctx, page, finalURL, email, password)
 		case challenged(page):
-			return &Error{Class: ClassChallenge, Msg: "the identity provider presented a bot challenge; sign in with a browser and use a session cookie"}
+			return &Error{Class: ClassChallenge, Endpoint: "login:authorize", Msg: "the identity provider presented a bot challenge; sign in with a browser and use a session cookie"}
 		default:
-			return &Error{Class: ClassProtocol, Msg: "the identity provider served an unknown sign-in page"}
+			return &Error{Class: ClassProtocol, Endpoint: "login:authorize", Msg: "the identity provider served an unknown sign-in page"}
 		}
 		if err != nil {
 			return err
@@ -74,7 +74,7 @@ func PasswordLogin(email, password string) func(ctx context.Context, c *Client) 
 		// The redirect chain ends at the portal, which sets its session cookies. Verify the session.
 		if _, err := c.Vehicles(ctx); err != nil {
 			if ClassOf(err) == ClassAuth {
-				return &Error{Class: ClassAuth, Msg: "sign-in did not establish a portal session (wrong password, pending terms or consent?)"}
+				return &Error{Class: ClassAuth, Endpoint: "login:session", Msg: "sign-in did not establish a portal session (wrong password, pending terms or consent?)"}
 			}
 			return err
 		}
@@ -96,9 +96,9 @@ func (c *Client) auth0Login(ctx context.Context, page, pageURL, email, password 
 	post := resolve(pageURL, action)
 	body, final, status, err := c.fetch(ctx, http.MethodPost, post, form, pageURL)
 	if err != nil {
-		return err
+		return atEndpoint(err, "login:credentials")
 	}
-	return c.afterSubmit(body, final, status)
+	return atEndpoint(c.afterSubmit(body, final, status), "login:credentials")
 }
 
 var templateModelRe = regexp.MustCompile(`(?s)templateModel\s*:\s*(\{.*?\})\s*,\s*\n`)
@@ -107,7 +107,7 @@ var csrfRe = regexp.MustCompile(`csrf_token\s*:\s*'([^']{1,200})'`)
 func (c *Client) classicLogin(ctx context.Context, page, pageURL, email, password string) error {
 	action, fields := parseForm(page)
 	if fields["_csrf"] == "" || fields["hmac"] == "" {
-		return &Error{Class: ClassProtocol, Msg: "the classic sign-in form changed (missing _csrf/hmac)"}
+		return &Error{Class: ClassProtocol, Endpoint: "login:authorize", Msg: "the classic sign-in form changed (missing _csrf/hmac)"}
 	}
 	form := url.Values{}
 	for k, v := range fields {
@@ -116,17 +116,17 @@ func (c *Client) classicLogin(ctx context.Context, page, pageURL, email, passwor
 	form.Set("email", email)
 	body, final, status, err := c.fetch(ctx, http.MethodPost, resolve(pageURL, action), form, pageURL)
 	if err != nil {
-		return err
+		return atEndpoint(err, "login:identifier")
 	}
 	if status >= 400 {
-		return &Error{Class: ClassAuth, Status: status, Msg: "the identity provider rejected the account identifier"}
+		return &Error{Class: ClassAuth, Status: status, Endpoint: "login:identifier", Msg: "the identity provider rejected the account identifier"}
 	}
 	if challenged(body) {
-		return &Error{Class: ClassChallenge, Msg: "the identity provider presented a bot challenge; use a session cookie"}
+		return &Error{Class: ClassChallenge, Endpoint: "login:identifier", Msg: "the identity provider presented a bot challenge; use a session cookie"}
 	}
 	m := templateModelRe.FindStringSubmatch(body)
 	if m == nil {
-		return &Error{Class: ClassProtocol, Msg: "the password page changed (no templateModel)"}
+		return &Error{Class: ClassProtocol, Endpoint: "login:identifier", Msg: "the password page changed (no templateModel)"}
 	}
 	var tm struct {
 		HMAC       string `json:"hmac"`
@@ -135,10 +135,10 @@ func (c *Client) classicLogin(ctx context.Context, page, pageURL, email, passwor
 		Error      string `json:"error"`
 	}
 	if err := json.Unmarshal([]byte(m[1]), &tm); err != nil || tm.HMAC == "" || tm.PostAction == "" {
-		return &Error{Class: ClassProtocol, Msg: "the password page changed (templateModel)"}
+		return &Error{Class: ClassProtocol, Endpoint: "login:identifier", Msg: "the password page changed (templateModel)"}
 	}
 	if tm.Error != "" {
-		return &Error{Class: ClassAuth, Msg: "the identity provider rejected the account"}
+		return &Error{Class: ClassAuth, Endpoint: "login:identifier", Msg: "the identity provider rejected the account"}
 	}
 	csrf := fields["_csrf"]
 	if cm := csrfRe.FindStringSubmatch(body); cm != nil {
@@ -152,9 +152,9 @@ func (c *Client) classicLogin(ctx context.Context, page, pageURL, email, passwor
 	pw.Set("password", password)
 	body, final2, status, err := c.fetch(ctx, http.MethodPost, resolve(final, tm.PostAction), pw, final)
 	if err != nil {
-		return err
+		return atEndpoint(err, "login:password")
 	}
-	return c.afterSubmit(body, final2, status)
+	return atEndpoint(c.afterSubmit(body, final2, status), "login:password")
 }
 
 // afterSubmit interprets where the credential POST ended.
@@ -233,7 +233,8 @@ func (c *Client) fetch(ctx context.Context, method, rawURL string, form url.Valu
 	}
 	req, err := http.NewRequestWithContext(ctx, method, rawURL, body)
 	if err != nil {
-		return "", "", 0, err
+		// The parse error quotes the URL, which can carry a state or nonce: never pass it on.
+		return "", "", 0, &Error{Class: ClassProtocol, Msg: "the sign-in request could not be built"}
 	}
 	req.Header.Set("User-Agent", c.cfg.UserAgent)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml")
