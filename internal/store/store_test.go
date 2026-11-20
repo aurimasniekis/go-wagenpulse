@@ -468,6 +468,23 @@ func TestHealthTransitions(t *testing.T) {
 	}
 }
 
+func TestTxPhaseObserver(t *testing.T) {
+	var calls atomic.Int32
+	var body, commit atomic.Int64
+	s := openTest(t, Options{TxPhaseObserver: func(_ string, b, c time.Duration) {
+		calls.Add(1)
+		body.Store(int64(b))
+		commit.Store(int64(c))
+	}})
+	ctx := context.Background()
+	if err := putSetting(ctx, s, "a", "b"); err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 1 || body.Load() <= 0 || commit.Load() <= 0 {
+		t.Fatalf("phase observer calls=%d body=%d commit=%d", calls.Load(), body.Load(), commit.Load())
+	}
+}
+
 func TestTxObserverAndIncrementalVacuum(t *testing.T) {
 	var calls atomic.Int32
 	s := openTest(t, Options{TxObserver: func(string, time.Duration, error) { calls.Add(1) }})
