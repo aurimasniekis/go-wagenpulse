@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-20
+
 ### Security
 
 - Updated `github.com/go-jose/go-jose/v4` from v4.1.4 to v4.1.6, which fixes CVE-2026-116587 (denial of service via
@@ -78,5 +80,6 @@ All notable changes to this project are documented here. The format follows
 - Built with Go 1.27.4, which fixes GO-2026-6859 (an HTTP/1 server crash caused by a `MaxBytesReader` header race in
   `net/http`). The container's build image is updated to match.
 
-[Unreleased]: https://github.com/aurimasniekis/go-wagenpulse/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/aurimasniekis/go-wagenpulse/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/aurimasniekis/go-wagenpulse/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/aurimasniekis/go-wagenpulse/releases/tag/v0.1.0
