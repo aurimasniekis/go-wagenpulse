@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aurimasniekis/go-wagenpulse/internal/apperr"
 	"github.com/aurimasniekis/go-wagenpulse/internal/audit"
 	"github.com/aurimasniekis/go-wagenpulse/internal/keyring/keyringtest"
 	"github.com/aurimasniekis/go-wagenpulse/internal/store"
@@ -142,5 +143,59 @@ func TestInterruptedLoadIsResumed(t *testing.T) {
 	}
 	if err := s.ReadDB().QueryRow(`SELECT count(*) FROM dictionary_versions`).Scan(&versions); err != nil || versions != 1 {
 		t.Fatalf("versions = %d (%v)", versions, err)
+	}
+}
+
+// A document sharing a stored version's source hash but not its content must not be merged into it.
+func TestSameHashDifferentContentIsRejected(t *testing.T) {
+	ctx := context.Background()
+	s := storetest.Open(t)
+	svc := New(s, audit.NewWriter(keyringtest.Load(t, s)))
+	docs, err := Bundled()
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := docs[0]
+	other := *d
+	other.Entries = append(append([]Entry{}, d.Entries...), Entry{Key: "11111111-2222-3333-4444-555555555555", Name: "extra"})
+
+	count := func(id string) (n int) {
+		if err := s.ReadDB().QueryRow(`SELECT count(*) FROM dictionary_entries WHERE version_id = ?`, id).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	// Complete version: a different document is a no-op and changes nothing.
+	v, _, err := svc.load(ctx, d, "bundled", audit.System)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.load(ctx, &other, "imported", audit.System); err != nil {
+		t.Fatalf("complete version: %v", err)
+	}
+	if n := count(v.ID); int64(n) != v.EntryCount || n != len(d.Entries) {
+		t.Fatalf("complete version changed: %d entries", n)
+	}
+
+	// Partial version: a different document is a conflict and touches nothing.
+	if err := s.W().Exec(ctx, `DELETE FROM dictionary_versions`); err != nil {
+		t.Fatal(err)
+	}
+	boom := errors.New("injected interruption")
+	svc.afterBatch = func(int) error { return boom }
+	if _, _, err := svc.load(ctx, d, "bundled", audit.System); !errors.Is(err, boom) {
+		t.Fatal(err)
+	}
+	svc.afterBatch = nil
+	var pid string
+	if err := s.ReadDB().QueryRow(`SELECT id FROM dictionary_versions`).Scan(&pid); err != nil {
+		t.Fatal(err)
+	}
+	before := count(pid)
+	if _, _, err := svc.load(ctx, &other, "imported", audit.System); !errors.Is(err, apperr.ErrConflict) {
+		t.Fatalf("partial version: err = %v, want conflict", err)
+	}
+	if count(pid) != before {
+		t.Fatal("partial version was modified")
 	}
 }

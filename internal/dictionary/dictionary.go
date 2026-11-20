@@ -258,9 +258,30 @@ func (svc *Service) storedKeys(ctx context.Context, id string) (map[string]bool,
 
 // fillEntries writes the entries of d that the version does not store yet, in batches of batchSize.
 func (svc *Service) fillEntries(ctx context.Context, id string, d *Document) error {
+	v, err := svc.GetVersion(ctx, id)
+	if err != nil {
+		return err
+	}
 	stored, err := svc.storedKeys(ctx, id)
 	if err != nil {
 		return err
+	}
+	if int64(len(stored)) == v.EntryCount {
+		return nil // complete: nothing to resume
+	}
+	// source_sha256 may be shared by documents with different content (it is the source PDF's hash). Resume only when
+	// the document is the one this version was created from; never merge a different one into it.
+	if v.Kind != d.Kind || v.DocumentVersion != d.DocumentVersion || v.DocumentDate != d.DocumentDate || v.EntryCount != int64(len(d.Entries)) {
+		return apperr.New(apperr.CodeConflict, "a dictionary version with this source hash exists but differs from the document")
+	}
+	inDoc := make(map[string]bool, len(d.Entries))
+	for _, e := range d.Entries {
+		inDoc[e.Key] = true
+	}
+	for k := range stored {
+		if !inDoc[k] {
+			return apperr.New(apperr.CodeConflict, "a dictionary version with this source hash stores entries the document does not contain")
+		}
 	}
 	var missing []Entry
 	for _, e := range d.Entries {
