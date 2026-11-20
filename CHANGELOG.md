@@ -5,6 +5,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+- Updated `github.com/go-jose/go-jose/v4` from v4.1.4 to v4.1.6, which fixes CVE-2026-116587 (denial of service via
+  crafted RSA parameters in JWKs).
+
 ## [0.1.0] - 2026-11-19
 
 > **Not externally reviewed.** WagenPulse has had no external security review. It stores personal vehicle telemetry and
