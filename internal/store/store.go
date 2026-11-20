@@ -52,6 +52,8 @@ type Options struct {
 	Clock       clock.Clock
 	// TxObserver, if set, receives the duration and outcome of every write transaction.
 	TxObserver TxObserver
+	// TxPhaseObserver, if set, receives the body and commit durations of every successful write transaction.
+	TxPhaseObserver TxPhaseObserver
 	// Metrics, if set, records write transaction duration and results, busy retries and writer wait time
 	// (HP-DB-003, HP-DB-004). Nil disables metrics.
 	Metrics *metrics.Metrics
@@ -182,7 +184,7 @@ func (s *Store) open(ctx context.Context, opts Options) error {
 	if err := secureFiles(s.dir); err != nil {
 		return err
 	}
-	s.writer = &Writer{db: s.wdb, clock: s.clock, health: s.health, observer: opts.TxObserver, metrics: opts.Metrics}
+	s.writer = &Writer{db: s.wdb, clock: s.clock, health: s.health, observer: opts.TxObserver, phases: opts.TxPhaseObserver, metrics: opts.Metrics}
 	s.health.mu.Lock()
 	s.health.probe = s.writer.spaceProbe
 	s.health.mu.Unlock()
