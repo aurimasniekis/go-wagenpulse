@@ -5,14 +5,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-11-20
+
 ### Fixed
 
 - The portal collector uses the portal's new host. On 2026-11-16 the EU Data Act portal moved from
   `eu-data-act.drivesomethinggreater.com` to `eu-data-act.vwgroup-datahub.com`. The old host only redirects, and its
   API paths end in HTTP 404. Collection stopped: the 404 of every data request read as "no active data request", and
   the session check then failed with "unexpected status (404 from vehicles)". A permanent redirect from the portal to
-  another host is now reported as a moved portal (`protocol`, naming the endpoint), never as "no active request". The redirect is not followed, so the request (with the vehicle identifier in its
-  path) never reaches the new host.
+  another host is now reported as a moved portal (`protocol`, naming the endpoint), never as "no active request". The
+  redirect is not followed, so the request (with the vehicle identifier in its path) never reaches the new host.
   Sources in password mode sign in on the new host by themselves. Sources in cookie mode need a session cookie from
   the new host.
 - Telling an expired session from "no active data request" no longer depends on the vehicle-list endpoint, whose live
@@ -126,7 +128,8 @@ All notable changes to this project are documented here. The format follows
 - Built with Go 1.27.4, which fixes GO-2026-6859 (an HTTP/1 server crash caused by a `MaxBytesReader` header race in
   `net/http`). The container's build image is updated to match.
 
-[Unreleased]: https://github.com/aurimasniekis/go-wagenpulse/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/aurimasniekis/go-wagenpulse/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/aurimasniekis/go-wagenpulse/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/aurimasniekis/go-wagenpulse/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/aurimasniekis/go-wagenpulse/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/aurimasniekis/go-wagenpulse/compare/v0.1.0...v0.1.1
